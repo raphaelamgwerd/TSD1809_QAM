@@ -36,7 +36,7 @@ void vApplicationIdleHook( void )
 	
 }
 
-int main(void)
+int main(void)//Hauptprogramm
 {
     resetReason_t reason = getResetReason();
 
