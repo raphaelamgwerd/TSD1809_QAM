@@ -5,6 +5,8 @@ VisualStudioVersion = 14.0.23107.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{54F91283-7BC4-4236-8FF9-10F437C3AD48}") = "QAMGen", "QAMGen\QAMGen.cproj", "{D4D166DA-1B10-428A-9C76-BC418F4F5430}"
 EndProject
+Project("{54F91283-7BC4-4236-8FF9-10F437C3AD48}") = "QAMDec", "QAMDec\QAMDec.cproj", "{9E7690C7-6B7D-47FC-9778-D85D04690303}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|AVR = Debug|AVR
@@ -15,6 +17,10 @@ Global
 		{D4D166DA-1B10-428A-9C76-BC418F4F5430}.Debug|AVR.Build.0 = Debug|AVR
 		{D4D166DA-1B10-428A-9C76-BC418F4F5430}.Release|AVR.ActiveCfg = Release|AVR
 		{D4D166DA-1B10-428A-9C76-BC418F4F5430}.Release|AVR.Build.0 = Release|AVR
+		{9E7690C7-6B7D-47FC-9778-D85D04690303}.Debug|AVR.ActiveCfg = Debug|AVR
+		{9E7690C7-6B7D-47FC-9778-D85D04690303}.Debug|AVR.Build.0 = Debug|AVR
+		{9E7690C7-6B7D-47FC-9778-D85D04690303}.Release|AVR.ActiveCfg = Release|AVR
+		{9E7690C7-6B7D-47FC-9778-D85D04690303}.Release|AVR.Build.0 = Release|AVR
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
