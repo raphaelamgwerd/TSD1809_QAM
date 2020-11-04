@@ -26,6 +26,7 @@
 #include "errorHandler.h"
 #include "NHD0420Driver.h"
 
+#include "qamgen.h"
 #include "qamdec.h"
 
 
@@ -44,6 +45,7 @@ int main(void)
 	vInitDisplay();
 	
 	xTaskCreate(vQuamDec, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, NULL);
+	//xTaskCreate(vQuamGen, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, NULL);
 	
 	vDisplayClear();
 	vDisplayWriteStringAtPos(0,0,"FreeRTOS 10.0.1");

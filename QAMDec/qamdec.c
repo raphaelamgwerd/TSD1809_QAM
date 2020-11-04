@@ -5,6 +5,8 @@
 *  Author: Chaos
 */ 
 
+#include <stdlib.h>
+
 #include "avr_compiler.h"
 #include "pmic_driver.h"
 #include "TC_driver.h"
@@ -24,13 +26,17 @@
 
 #include "qamdec.h"
 
-#define NR_OF_DECODER_SAMPLES         32UL
+#define COMPLETESAMPLECOUNT             4
+#define DECODERSAMPLECOUNT              32UL
 
-#define DECODER_FREQUENCY_INITIAL_VALUE		1000UL * NR_OF_DECODER_SAMPLES
+#define QAMLEVELS                       4       // QAM4 is implemented.
 
+#define DECODER_FREQUENCY_INITIAL_VALUE		1000UL * DECODERSAMPLECOUNT
 
-uint16_t adcBuffer0[NR_OF_DECODER_SAMPLES];
-uint16_t adcBuffer1[NR_OF_DECODER_SAMPLES];
+uint16_t usQAMHalfMedianLevels[QAMLEVELS] = {123, 256, 781, 1236};
+
+uint16_t adcBuffer0[DECODERSAMPLECOUNT];
+uint16_t adcBuffer1[DECODERSAMPLECOUNT];
 
 QueueHandle_t decoderQueue;
 
@@ -64,7 +70,7 @@ void initDecDMA(void) {
 	DMA.CH2.CTRLA = DMA_CH_BURSTLEN_2BYTE_gc | DMA_CH_SINGLE_bm | DMA_CH_REPEAT_bm;
 	DMA.CH2.ADDRCTRL = DMA_CH_SRCRELOAD_BURST_gc | DMA_CH_SRCDIR_INC_gc | DMA_CH_DESTRELOAD_TRANSACTION_gc | DMA_CH_DESTDIR_INC_gc;
 	DMA.CH2.TRIGSRC = DMA_CH_TRIGSRC_ADCA_CH0_gc;
-	DMA.CH2.TRFCNT = NR_OF_DECODER_SAMPLES*2;
+	DMA.CH2.TRFCNT = DECODERSAMPLECOUNT*2;
 	DMA.CH2.SRCADDR0 = ((uint16_t)(&ADCA.CH0.RES) >> 0) & 0xFF;
 	DMA.CH2.SRCADDR1 = ((uint16_t)(&ADCA.CH0.RES) >> 8) & 0xFF;
 	DMA.CH2.SRCADDR2 = 0x00;
@@ -77,7 +83,7 @@ void initDecDMA(void) {
 	DMA.CH3.CTRLA = DMA_CH_BURSTLEN_2BYTE_gc | DMA_CH_SINGLE_bm | DMA_CH_REPEAT_bm;
 	DMA.CH3.ADDRCTRL = DMA_CH_SRCRELOAD_BURST_gc | DMA_CH_SRCDIR_INC_gc | DMA_CH_DESTRELOAD_TRANSACTION_gc | DMA_CH_DESTDIR_INC_gc;
 	DMA.CH3.TRIGSRC = DMA_CH_TRIGSRC_ADCA_CH0_gc;
-	DMA.CH3.TRFCNT = NR_OF_DECODER_SAMPLES*2;
+	DMA.CH3.TRFCNT = DECODERSAMPLECOUNT*2;
 	DMA.CH3.SRCADDR0 = ((uint16_t)(&ADCA.CH0.RES) >> 0) & 0xFF;
 	DMA.CH3.SRCADDR1 = ((uint16_t)(&ADCA.CH0.RES) >> 8) & 0xFF;
 	DMA.CH3.SRCADDR2 = 0x00;
@@ -89,19 +95,79 @@ void initDecDMA(void) {
 	DMA.CH3.CTRLA |= DMA_CH_ENABLE_bm;
 }
 
+
+
+int sCompare (const void * a, const void * b)
+{
+    return ( *(int*)a - *(int*)b );
+}
+
+uint16_t usMedian(uint16_t usArray[], uint8_t ucElements)
+{
+uint16_t usReturnValue;
+
+    /* First sort the array. */
+    qsort(usArray, ucElements, sizeof(uint16_t), sCompare);
+    
+    
+    /* Check for even case. */
+    if (ucElements % 2 != 0)
+    {
+        usReturnValue = usArray[ucElements / 2];
+    }
+    else
+    {
+        usReturnValue = (usArray[(ucElements - 1) / 2] + usArray[ucElements / 2]) / 2;
+    }
+    
+    return usReturnValue;
+}
+
+uint8_t ucAllocateValue(uint16_t usMedianValue)
+{
+uint8_t ucQAMLevel = 0;
+uint16_t usMedianDifference;
+uint16_t usCompareValue = 0xFFFF;
+    
+    for(uint8_t ucQAMLevelCounter; ucQAMLevelCounter < QAMLEVELS; ++ucQAMLevelCounter)
+    {
+        /* Calculate difference of median value and reference value of actual iteration. */
+        usMedianDifference = abs(usMedianValue - usQAMHalfMedianLevels[ucQAMLevelCounter]);
+        
+        /* If newly calculated difference is smaller than previous difference. */
+        if (usMedianDifference < usCompareValue)
+        {
+            usCompareValue = usMedianDifference;
+            ucQAMLevel = ucQAMLevelCounter;
+        }
+    }
+    return ucQAMLevel;
+}
+
 void vQuamDec(void* pvParameters) {
-	decoderQueue = xQueueCreate(4, NR_OF_DECODER_SAMPLES*sizeof(int16_t));
+uint16_t usReceiveArray[2 * DECODERSAMPLECOUNT] = {};
+uint8_t ucArrayReference = 0;           // reference state of array
+    
+	decoderQueue = xQueueCreate(COMPLETESAMPLECOUNT, DECODERSAMPLECOUNT*sizeof(int16_t));
 	
 	initDecDMA();
 	initADC();
 	initADCTimer();
 	for(;;) {
-		
-		vTaskDelay(2/portTICK_RATE_MS);
+		if (!uxQueueMessagesWaiting(decoderQueue))
+		{
+    		xQueueReceive(decoderQueue, &usReceiveArray[ucArrayReference], pdMS_TO_TICKS(0));
+            ucAllocateValue(usMedian(usReceiveArray, DECODERSAMPLECOUNT / 2));
+            /* Find new reference value and copy new array */
+		}
+        else
+        {
+            vTaskDelay(2/portTICK_RATE_MS);
+        }
 	}
 }
 
-void fillDecoderQueue(uint16_t buffer[NR_OF_DECODER_SAMPLES]) {
+void fillDecoderQueue(uint16_t buffer[DECODERSAMPLECOUNT]) {
 	BaseType_t xTaskWokenByReceive = pdFALSE;
 	xQueueSendFromISR(decoderQueue, &buffer[0], &xTaskWokenByReceive);
 }
