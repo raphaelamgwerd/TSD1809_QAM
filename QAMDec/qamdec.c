@@ -28,8 +28,15 @@
 
 #define COMPLETESAMPLECOUNT             4
 #define DECODERSAMPLECOUNT              32UL
+#define MEDIANSAMPLECOMPARECOUNT        DECODERSAMPLECOUNT / 4
+
+#define DATABYTEQUEUELENGTH             50  // Bytes which can be stored in received data bytes queue.
+
+#define TRANSITIONNOTFOUND              0 // indicates that no new complete signal was found
+#define TRANSITIONFOUND                 1 // indicates that a new complete signal was found
 
 #define QAMLEVELS                       4       // QAM4 is implemented.
+#define QAMPACKAGESPERBYTE              4       // 4 bit packages of 2 bits for one byte.
 
 #define DECODER_FREQUENCY_INITIAL_VALUE		1000UL * DECODERSAMPLECOUNT
 
@@ -39,6 +46,7 @@ uint16_t adcBuffer0[DECODERSAMPLECOUNT];
 uint16_t adcBuffer1[DECODERSAMPLECOUNT];
 
 QueueHandle_t decoderQueue;
+QueueHandle_t receivedByteQueue;
 
 void initADC(void) {
 	ADCA.CTRLA = 0x01;
@@ -97,9 +105,9 @@ void initDecDMA(void) {
 
 
 
-int sCompare (const void * a, const void * b)
+int sCompare (const void* ValueOne, const void* ValueTwo)
 {
-    return ( *(int*)a - *(int*)b );
+    return ( *(int*)ValueOne - *(int*)ValueTwo );
 }
 
 uint16_t usMedian(uint16_t usArray[], uint8_t ucElements)
@@ -129,6 +137,7 @@ uint8_t ucQAMLevel = 0;
 uint16_t usMedianDifference;
 uint16_t usCompareValue = 0xFFFF;
     
+    /* Check for each QAM level, which median level is nearest. */
     for(uint8_t ucQAMLevelCounter; ucQAMLevelCounter < QAMLEVELS; ++ucQAMLevelCounter)
     {
         /* Calculate difference of median value and reference value of actual iteration. */
@@ -144,11 +153,69 @@ uint16_t usCompareValue = 0xFFFF;
     return ucQAMLevel;
 }
 
+uint8_t bGetReceivedData(uint16_t usReceiveArray[], uint8_t* ucActualArrayPos, uint16_t usSignalOffsetLevel, uint16_t usReceivedValueArray[])
+{
+uint8_t ucDataCounter = 0;
+uint8_t ucTransitionFound = TRANSITIONNOTFOUND;
+
+    do {
+        if (usReceiveArray[ucDataCounter + 1] > usSignalOffsetLevel)
+        {
+            if (usReceiveArray[ucDataCounter] <= usSignalOffsetLevel)
+            {
+                ucTransitionFound = TRANSITIONFOUND;
+            }
+        }
+        ++ucDataCounter;
+        /* Repeat as long as no transition (start of signal = sine-transition) was found
+           or no complete signal could be found. */
+    } while ((ucTransitionFound == TRANSITIONNOTFOUND) && ((ucDataCounter - 1) <= (*ucActualArrayPos)));
+    
+    --ucDataCounter; // correct position of found transition
+    
+    
+    if (ucTransitionFound == TRANSITIONFOUND)
+    {
+        /* Copy array values. Extract received data and modify receive data buffer. */
+        for (uint8_t ucArrayCopyCounter = 0; ucArrayCopyCounter < DECODERSAMPLECOUNT; ++ucArrayCopyCounter)
+        {
+            usReceivedValueArray[ucArrayCopyCounter] = usReceiveArray[ucDataCounter + ucArrayCopyCounter];
+            usReceiveArray[ucArrayCopyCounter] = usReceiveArray[ucDataCounter + DECODERSAMPLECOUNT];
+        }
+        /* Set new reference position in receive array. */
+        *ucActualArrayPos = ucDataCounter;
+    }
+    else
+    { // If no complete signal was detected, increase new reference position in array. */
+        *ucActualArrayPos += DECODERSAMPLECOUNT;
+    }
+    return ucTransitionFound;
+}
+
+void vOffsetLevelAdjust(uint16_t usReceivedValueArray[], uint16_t* usSignalOffsetLevel)
+{
+    *usSignalOffsetLevel = usMedian(usReceivedValueArray, DECODERSAMPLECOUNT);
+}
+
 void vQuamDec(void* pvParameters) {
 uint16_t usReceiveArray[2 * DECODERSAMPLECOUNT] = {};
 uint8_t ucArrayReference = 0;           // reference state of array
+uint16_t usReceivedValueArray[DECODERSAMPLECOUNT] = {};  // current received data
+
+uint16_t usMedianCompareValue;
+uint8_t ucActualQAMValue;
+
+uint8_t ucQAMLevelCalibArrayCounter = 0;
+uint16_t usQAMLevelsForCalibration[8] = {};
+uint16_t usQAMCalibTriggerValue = 0;
+
+uint8_t ucDataByte;                         // received data byte
+uint8_t ucReceivedBitPackageCounter = 0;    // Counts amount of bit packages.
+
+uint16_t usSignalOffsetLevel = 2048;       // Offset Voltage
     
 	decoderQueue = xQueueCreate(COMPLETESAMPLECOUNT, DECODERSAMPLECOUNT*sizeof(int16_t));
+    receivedByteQueue = xQueueCreate(DATABYTEQUEUELENGTH, sizeof(uint8_t));
 	
 	initDecDMA();
 	initADC();
@@ -157,12 +224,36 @@ uint8_t ucArrayReference = 0;           // reference state of array
 		if (!uxQueueMessagesWaiting(decoderQueue))
 		{
     		xQueueReceive(decoderQueue, &usReceiveArray[ucArrayReference], pdMS_TO_TICKS(0));
-            ucAllocateValue(usMedian(usReceiveArray, DECODERSAMPLECOUNT / 2));
-            /* Find new reference value and copy new array */
+            if(bGetReceivedData(&usReceiveArray[0], &ucArrayReference, usSignalOffsetLevel, &usReceivedValueArray[0]) == TRANSITIONFOUND)
+            { // If data signal was received. */
+                
+                usMedianCompareValue = usMedian(usReceiveArray, MEDIANSAMPLECOMPARECOUNT);
+                ucActualQAMValue = ucAllocateValue(usMedianCompareValue);
+                
+                ucDataByte = (ucDataByte << 2) + ucActualQAMValue;
+                usQAMCalibTriggerValue = (usQAMCalibTriggerValue << 2) + ucActualQAMValue;
+                usQAMLevelsForCalibration[ucQAMLevelCalibArrayCounter] = usMedianCompareValue;
+                ucQAMLevelCalibArrayCounter = (ucQAMLevelCalibArrayCounter < 7) ? ucQAMLevelCalibArrayCounter + 1 : 0; 
+                
+                if (++ucReceivedBitPackageCounter >= QAMPACKAGESPERBYTE)
+                {
+                    ucReceivedBitPackageCounter = 0;
+                    ucDataByte = 0;
+                    xQueueSend(receivedByteQueue, (void*)&ucDataByte, pdMS_TO_TICKS(0));
+                }
+                
+                if (usQAMCalibTriggerValue == 0xAF05)
+                {
+                    /* Set new reference values for all QAM levels. */
+                }
+                
+                /* Find new reference value and copy new array */
+                vOffsetLevelAdjust(usReceivedValueArray, &usSignalOffsetLevel);
+            }
 		}
         else
         {
-            vTaskDelay(2/portTICK_RATE_MS);
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
 	}
 }
