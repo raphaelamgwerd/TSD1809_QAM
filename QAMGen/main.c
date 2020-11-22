@@ -44,6 +44,7 @@ extern void vApplicationIdleHook( void );
 
 
 void vSteuertask(void *pvParameters);
+void vButtonTask(void *pvParameters);
 
 
 void vApplicationIdleHook( void )
@@ -65,7 +66,7 @@ int main(void)//Hauptprogramm
  
 
 	xTaskCreate(vQuamGen, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, NULL);
-    xTaskCreate(vSteuertask(), NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, &xSteuertask);
+    xTaskCreate(vSteuertask, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, &xSteuertask);
     xTaskCreate(vButtonTask, (const char *) "ButtonTask", configMINIMAL_STACK_SIZE, NULL, 2, &xButtonTaskHandle);
 
     
@@ -79,16 +80,21 @@ int main(void)//Hauptprogramm
 	return 0;
 }
 
-void vSteuerTask(void *pvParameters)
+void vSteuertask(void *pvParameters)
 {
     (void) pvParameters;
     uint32_t Buttonvalue;
+    char DataString[33];
     
     while(1)
     {
         if (Buttonvalue&BUTTON1SHORTPRESSEDMASK)
         {
-            
+            DataString[0] = 0x83;   // Command + Amount of Data 0bXXXY'YYYY
+            DataString[1] = 0xAB;
+            DataString[2] = 0x37;
+            DataString[3] = 0x85;
+            vsendCommand(DataString);
         }
     
     }    
@@ -103,22 +109,22 @@ void vButtonTask(void *pvParameters) {
         
         if(getButtonPress(BUTTON1) == SHORT_PRESSED) {
             
-            xTaskNotify(xSteuerTask,BUTTON1SHORTPRESSEDMASK,eSetValueWithOverwrite);
+            xTaskNotify(vSteuertask,BUTTON1SHORTPRESSEDMASK,eSetValueWithOverwrite);
             
             
         }
         if(getButtonPress(BUTTON2) == SHORT_PRESSED) {
             
-            xTaskNotify(xSteuerTask,BUTTON2SHORTPRESSEDMASK,eSetValueWithOverwrite);
+            xTaskNotify(vSteuertask,BUTTON2SHORTPRESSEDMASK,eSetValueWithOverwrite);
         }
         if(getButtonPress(BUTTON3) == SHORT_PRESSED) {
             
-            xTaskNotify(xSteuerTask,BUTTON3SHORTPRESSEDMASK,eSetValueWithOverwrite);
+            xTaskNotify(vSteuertask,BUTTON3SHORTPRESSEDMASK,eSetValueWithOverwrite);
             
         }
         if(getButtonPress(BUTTON4) == SHORT_PRESSED) {
             
-            xTaskNotify(xSteuerTask,BUTTON4SHORTPRESSEDMASK,eSetValueWithOverwrite);
+            xTaskNotify(vSteuertask,BUTTON4SHORTPRESSEDMASK,eSetValueWithOverwrite);
             
         }
 
