@@ -38,15 +38,38 @@
 #define QAMLEVELS                       4       // QAM4 is implemented.
 #define QAMPACKAGESPERBYTE              4       // 4 bit packages of 2 bits for one byte.
 
+/* Protocol defines */
+#define SYNCHRONISATIONBYTE             0xFF
+#define CALIBRATIONSIGNAL               0xAF05
+#define COMMANDMASK                     0xE0
+#define COMMANDBITPOSITION              5
+#define DATABYTESMASK                   0x1F
+#define MAXRECEIVEDATABYTES             32
+#define PROTOCOLSTOSTORE                16  /* can store 16 received messages without getting them */
+#define COMMANDBYTEPOSITION             0   /* position in protocol queue */
+#define DATABYTECOUNTPOSITION           1
+#define DATABYTESTARTPOSITION           2
+
+
 #define DECODER_FREQUENCY_INITIAL_VALUE		1000UL * DECODERSAMPLECOUNT
 
-uint16_t usQAMHalfMedianLevels[QAMLEVELS] = {123, 256, 781, 1236};
+/* Declaration of state machine */
+typedef enum
+{
+    Idle,
+    Command,
+    Data,
+    Checksum
+} eProtocolDecoderStates;
+
+uint16_t usQAMHalfMedianLevels[QAMLEVELS] = {123, 256, 781, 1236}; // TODO rank order: High freq / Low freq: LowVolt/LowVolt, LowVolt/HighVolt, HighVolt/LowVolt, High/High
 
 uint16_t adcBuffer0[DECODERSAMPLECOUNT];
 uint16_t adcBuffer1[DECODERSAMPLECOUNT];
 
 QueueHandle_t decoderQueue;
 QueueHandle_t receivedByteQueue;
+QueueHandle_t receivedProtocolQueue;
 
 void initADC(void) {
 	ADCA.CTRLA = 0x01;
@@ -197,6 +220,96 @@ void vOffsetLevelAdjust(uint16_t usReceivedValueArray[], uint16_t* usSignalOffse
     *usSignalOffsetLevel = usMedian(usReceivedValueArray, DECODERSAMPLECOUNT);
 }
 
+uint8_t ucQAMGetData(uint8_t* ucCommand, uint8_t* ucDataBytes, uint8_t ucDataArray[])
+{
+uint8_t ucQueueBytes[MAXRECEIVEDATABYTES + 2] = {};
+uint8_t ucReturnValue = pdFALSE;
+
+    if (xQueueReceive(receivedProtocolQueue, &ucQueueBytes, pdMS_TO_TICKS(1)) == pdTRUE)
+    {
+        *ucCommand = ucQueueBytes[COMMANDBYTEPOSITION];
+        *ucDataBytes = ucQueueBytes[DATABYTECOUNTPOSITION];
+        for (uint8_t ucDataByteCounter = 0; ucDataByteCounter < *ucDataBytes; ++ucDataByteCounter)
+        {
+            ucDataArray[ucDataByteCounter] = ucQueueBytes[DATABYTESTARTPOSITION + ucDataByteCounter];
+        }
+        ucReturnValue = pdTRUE;
+    }
+    return ucReturnValue;
+}
+
+void xProtocolDecoder(void* pvParameters) {
+eProtocolDecoderStates eProtocolDecoder = Idle;
+uint8_t ucReceivedByte;
+uint8_t ucDataBytesReceived;
+uint8_t ucDataBytesCounter = 0;
+uint8_t ucCommandByte;
+uint8_t ucQueueBytes[MAXRECEIVEDATABYTES + 2] = {};
+
+    receivedProtocolQueue = xQueueCreate(PROTOCOLSTOSTORE, sizeof(uint8_t) * (MAXRECEIVEDATABYTES + 2));
+
+    while(1)
+    {
+        
+        if(xQueueReceive(receivedByteQueue, &ucReceivedByte, pdMS_TO_TICKS(1)) == pdTRUE)
+        {
+            switch (eProtocolDecoder)
+            {
+                case Idle:
+                {
+                    if (ucReceivedByte == SYNCHRONISATIONBYTE)
+                    {
+                        eProtocolDecoder = Command;
+                    }
+                    break;
+                }
+                case Command:
+                {
+                    ucCommandByte = (ucReceivedByte & COMMANDMASK) >> COMMANDBITPOSITION;
+                    ucQueueBytes[COMMANDBYTEPOSITION] = ucCommandByte;
+                    ucDataBytesReceived = ucReceivedByte & DATABYTESMASK;
+                    ucQueueBytes[DATABYTECOUNTPOSITION] = ucCommandByte;
+                    if (ucDataBytesReceived > 0)
+                    {
+                        eProtocolDecoder = Data;
+                    }
+                    else
+                    {
+                        eProtocolDecoder = Checksum;
+                    }
+                    break;
+                }
+                case Data:
+                {
+                    ucQueueBytes[DATABYTESTARTPOSITION + ucDataBytesCounter] = ucReceivedByte;
+                    if (++ucDataBytesCounter >= ucDataBytesReceived)
+                    {
+                        eProtocolDecoder = Checksum;
+                    }
+                    break;
+                }
+                case Checksum:
+                {
+                    if (1)
+                    { // if Checksum valid
+                        xQueueSend(receivedByteQueue, (void*)&ucQueueBytes, pdMS_TO_TICKS(0));
+                    }
+                    break;
+                }
+                default:
+                {
+                    eProtocolDecoder = Idle;
+                    break;
+                }
+            }
+        }
+        else
+        {
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+    }
+}
+
 void vQuamDec(void* pvParameters) {
 uint16_t usReceiveArray[2 * DECODERSAMPLECOUNT] = {};
 uint8_t ucArrayReference = 0;           // reference state of array
@@ -220,6 +333,8 @@ uint16_t usSignalOffsetLevel = 2048;       // Offset Voltage
 	initDecDMA();
 	initADC();
 	initADCTimer();
+    xTaskCreate(xProtocolDecoder, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, NULL);
+    
 	for(;;) {
 		if (!uxQueueMessagesWaiting(decoderQueue))
 		{
@@ -230,7 +345,7 @@ uint16_t usSignalOffsetLevel = 2048;       // Offset Voltage
                 usMedianCompareValue = usMedian(usReceiveArray, MEDIANSAMPLECOMPARECOUNT);
                 ucActualQAMValue = ucAllocateValue(usMedianCompareValue);
                 
-                ucDataByte = (ucDataByte << 2) + ucActualQAMValue;
+                ucDataByte = (ucDataByte << 2) + ucActualQAMValue;      // fill data byte by left shift (LSB protocol)
                 usQAMCalibTriggerValue = (usQAMCalibTriggerValue << 2) + ucActualQAMValue;
                 usQAMLevelsForCalibration[ucQAMLevelCalibArrayCounter] = usMedianCompareValue;
                 ucQAMLevelCalibArrayCounter = (ucQAMLevelCalibArrayCounter < 7) ? ucQAMLevelCalibArrayCounter + 1 : 0; 
@@ -242,9 +357,20 @@ uint16_t usSignalOffsetLevel = 2048;       // Offset Voltage
                     xQueueSend(receivedByteQueue, (void*)&ucDataByte, pdMS_TO_TICKS(0));
                 }
                 
-                if (usQAMCalibTriggerValue == 0xAF05)
+                if (usQAMCalibTriggerValue == CALIBRATIONSIGNAL)
                 {
                     /* Set new reference values for all QAM levels. */
+                    for (int8_t ucSetMedianRefCounter = 0; ucSetMedianRefCounter < 8; ucSetMedianRefCounter+=2)
+                    {
+                        if (ucSetMedianRefCounter + ucQAMLevelCalibArrayCounter < 8)
+                        {
+                            usQAMHalfMedianLevels[ucSetMedianRefCounter] = (usQAMLevelsForCalibration[ucSetMedianRefCounter + ucQAMLevelCalibArrayCounter] + usQAMLevelsForCalibration[ucSetMedianRefCounter + 1 + ucQAMLevelCalibArrayCounter]) / 2;
+                        }
+                        else
+                        {
+                            usQAMHalfMedianLevels[ucSetMedianRefCounter] = (usQAMLevelsForCalibration[ucSetMedianRefCounter + ucQAMLevelCalibArrayCounter - 8] + usQAMLevelsForCalibration[ucSetMedianRefCounter + 1 + ucQAMLevelCalibArrayCounter - 8]) / 2;
+                        }
+                    }
                 }
                 
                 /* Find new reference value and copy new array */
@@ -257,6 +383,7 @@ uint16_t usSignalOffsetLevel = 2048;       // Offset Voltage
         }
 	}
 }
+
 
 void fillDecoderQueue(uint16_t buffer[DECODERSAMPLECOUNT]) {
 	BaseType_t xTaskWokenByReceive = pdFALSE;

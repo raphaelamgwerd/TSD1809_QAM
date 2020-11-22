@@ -44,7 +44,7 @@ int main(void)
 	vInitClock();
 	vInitDisplay();
 	
-	xTaskCreate(vQuamDec, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, NULL);
+	xTaskCreate(vQuamDec, NULL, configMINIMAL_STACK_SIZE+100, NULL, 3, NULL);
 	//xTaskCreate(vQuamGen, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, NULL);
 	
 	vDisplayClear();
