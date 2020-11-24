@@ -29,7 +29,9 @@
 #define NR_OF_GENERATOR_SAMPLES					32UL
 #define GENERATOR_FREQUENCY_INITIAL_VALUE		1000UL
 
-void vsendCommand(void *pvParameters);
+#define DATABYTETOSENDMASK      0x1F
+
+void vsendCommand(uint8_t Data[]);
 void vsendFrame(void *pvParameters);
 
 typedef enum
@@ -40,7 +42,6 @@ typedef enum
     
 } eProtokollStates;
 
-TaskHandle_t xsendCommand;
 TaskHandle_t xsendFrame;
 
 EventGroupHandle_t xQuamgenal_1;
@@ -48,16 +49,16 @@ EventGroupHandle_t xQuamgenal_2;
 
 QueueHandle_t xQueue_Data;
 
-const int16_t sinLookup1000[NR_OF_GENERATOR_SAMPLES] = {  0x800,0x0850,0x089d,0x08e4,0x0922,0x0955,0x097a,0x0992,
-                                                         0x099a,0x0992,0x097a,0x0955,0x0922,0x08e4,0x089d,0x0850,
-                                                         0x0800,0x07b0,0x0763,0x071c,0x06de,0x06ab,0x0686,0x066e,
-                                                         0x0666,0x066e,0x0686,0x06ab,0x06de,0x071c,0x0763,0x07b0
+const int16_t sinLookup1000[NR_OF_GENERATOR_SAMPLES] = {   0,   80,  157,  228,  290,  341,  378,  402,
+                                                         410,  402,  378,  341,  290,  228,  157,   80,
+                                                           0,  -80, -157, -228, -290, -341, -378, -402, 
+                                                        -410, -402, -378, -341, -290, -228, -157,  -80
                                                          };
                                                          
-const int16_t sinLookup2000[NR_OF_GENERATOR_SAMPLES] = { 0x0800, 0x089d,0x0922,0x097a,0x099a,0x097a,0x0922,0x089d,
-                                                         0x0800,0x0763,0x06de,0x0686,0x0666,0x0686,0x06de,0x0763,
-                                                         0x0800,0x089d,0x0922,0x097a,0x099a,0x097a,0x0922,0x089d,
-                                                         0x0800,0x0763,0x06de,0x0686,0x0666,0x0686,0x06de,0x0763
+const int16_t sinLookup2000[NR_OF_GENERATOR_SAMPLES] = { 0,  157,  290,  378,  410,  378,  290,  157,
+                                                         0, -157, -290, -378, -410, -378, -290, -157,
+                                                         0,  157,  290,  378,  410,  378,  290,  157,    
+                                                         0, -157, -290, -378, -410, -378, -290, -157
                                                          };
 
 static uint16_t dacBuffer0[NR_OF_GENERATOR_SAMPLES] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -170,8 +171,7 @@ void vQuamGen(void *pvParameters) {
        xQuamgenal_2=xEventGroupCreate();
        xQueue_Data = xQueueCreate( NR_OF_DATA_SAMPLES, sizeof( uint8_t ) );
     
-        xTaskCreate(vsendCommand(), NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, &xsendCommand);
-        xTaskCreate(vsendFrame(), NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, &xsendFrame);
+        xTaskCreate(vsendFrame, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, &xsendFrame);
 	
 	for(;;) {
 		vTaskDelay(10/portTICK_RATE_MS);
@@ -192,7 +192,7 @@ void fillBuffer(uint16_t buffer[NR_OF_GENERATOR_SAMPLES]) {
         Amp=2;
     }
 	for(int i = 0; i < NR_OF_GENERATOR_SAMPLES;i++) {
-		buffer[i] = (Amp*sinLookup1000[i]);
+		buffer[i] = 0x800 + (Amp*sinLookup1000[i]);
 	}
         xEventGroupSetBits(xQuamgenal_1,DATEN_AUFBEREITET);
 }
@@ -213,7 +213,7 @@ void fillBuffer_1(uint16_t buffer[NR_OF_GENERATOR_SAMPLES]) {
     }
             
     for(int i = 0; i < NR_OF_GENERATOR_SAMPLES;i++) {
-       buffer[i] = (Amp_1*sinLookup2000[i]); 
+       buffer[i] = 0x800 + (Amp_1*sinLookup2000[i]); 
     }
        xEventGroupSetBits(xQuamgenal_2,DATEN_AUFBEREITET);
    
@@ -246,10 +246,13 @@ ISR(DMA_CH3_vect)
     fillBuffer_1(&dacBuffer3[0]);
 }
 
-void vsendCommand(void *pvParameters)
+void vsendCommand(uint8_t Data[])
 {
-    (void) pvParameters;
-    xQueueSend(xQueue_Data, (void *)&NR_OF_GENERATOR_SAMPLES,pdMS_TO_TICKS(10)==pdTRUE );
+
+    if( xQueue_Data != 0 )
+    {
+        xQueueSend(xQueue_Data, (void *)&Data,pdMS_TO_TICKS(10));
+    }    
 }
 
 void vsendFrame(void *pvParameters)
@@ -260,9 +263,11 @@ void vsendFrame(void *pvParameters)
     uint8_t SendBitPaketCounter;
     uint8_t CheckVar=0;
     uint8_t TempValue;
-    uint8_t Var_Idle;
+    uint8_t DataByteCounter = 0;
+    uint8_t DataBytesToSend;
     uint8_t BitCounter=0;
-    
+    uint8_t IdleSendByte=0;     // Difference between 0xAF and 0x05
+    uint8_t Data[NR_OF_DATA_SAMPLES + 1] = {};
     QueueHandle_t xQueue_Data;
 
     
@@ -271,16 +276,37 @@ void vsendFrame(void *pvParameters)
     while(1)
     {
         
+
+        
         switch(Protokoll)
         {
             case Idle:
             {
-                if (xQueueReceive(xQueue_Data,(void*)&NR_OF_DATA_SAMPLES,pdMS_TO_TICKS(10)==pdTRUE)&CheckVar>=1)
+                if (IdleSendByte == 0)
                 {
-                    Var_Idle=0xAF05;
+                    if (CheckVar >= 1)
+                    {
+                        IdleSendByte = 1;
+                        TempValue = 0xAF;
+                        CheckVar=0;
+                    }
+                }
+                else
+                {
+                    if (CheckVar >= 1)
+                    {
+                        IdleSendByte = 0;
+                        TempValue = 0x05;
+                        CheckVar=0;
+                            
+                        if (xQueueReceive(xQueue_Data,(void*)&Data,pdMS_TO_TICKS(0))==pdTRUE)
+                        {
+                            DataBytesToSend = Data[0] & DATABYTETOSENDMASK;
+                            Protokoll=sendSyncByte;
+                        }                                
+                    }
                 }
                 
-                Protokoll=sendSyncByte
                 //Receive Queue (uint8) 33Byts
                 //Check Temp Var in jedem Case
                 //Wechsel sobald send Data wieder Idle
@@ -288,37 +314,50 @@ void vsendFrame(void *pvParameters)
             }
             
             case sendSyncByte:
-            {   
-                if (CheckVar>=1&Var_Idle==0xAF05)
+            {
+                if (CheckVar>=1)
                 {
                     TempValue=0xFF;
-                    Protokoll=sendDatenbuffer
+                    CheckVar=0;
+                    Protokoll=sendDatenbuffer;
                 }
                 
                 break;
-            }
+            }                          
             
             case sendDatenbuffer:
-            
             {  
-                if (CheckVar>=1&TempValue==0xFF)
+                if (CheckVar>=1)
                 {
-                     int i = 0; i < NR_OF_GENERATOR_SAMPLES;i++ 
+                    if (DataByteCounter < DataBytesToSend)
+                    {
+                        TempValue = Data[DataByteCounter];
+                        CheckVar=0;
+                        DataByteCounter++;
+                    } 
+                    else
+                    {
+                        DataByteCounter = 0;
+                        Protokoll=Idle;
+                    }
                 }
- 
-                Protokoll=Idle
+
                 break;
             }
-            
-            
-            
-            
-           
+            default:
+            {
+                Protokoll=Idle;
+                break;
+            }
+
         }
         if (SendBitPaketCounter >= 3)
         {
-            SendBitPaketCounter = TempValue;
+            SendByteValue = TempValue;
+            SendBitPaketCounter = 0;
+            CheckVar=1;
         }
+         
         if (xEventGroupGetBits(xQuamgenal_1)&DATEN_AUFBEREITET)
         {
              xEventGroupClearBits(xQuamgenal_1,DATEN_AUFBEREITET);
@@ -355,13 +394,9 @@ void vsendFrame(void *pvParameters)
         
         if(BitCounter>=2)
         {
-          BitCounter=0  
-          SendByteValue = SendByteValue >> 2;
-          SendBitPaketCounter++
-        if (SendBitPaketCounter >= 3)
-        {
-            CheckVar=1
-        }  
+            BitCounter=0;
+            SendBitPaketCounter++;
+            SendByteValue = SendByteValue >> 2;
         }
         
     }
