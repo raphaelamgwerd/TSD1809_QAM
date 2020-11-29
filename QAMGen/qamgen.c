@@ -29,6 +29,11 @@
 #define NR_OF_GENERATOR_SAMPLES					32UL
 #define GENERATOR_FREQUENCY_INITIAL_VALUE		1000UL
 
+/* Flags to show QAM channel ready for new amplitude level. */
+#define QAMCHANNEL_1_READY      0x01
+#define QAMCHANNEL_2_READY      0x02
+
+/* Defines which bits are representing the amount of data bytes to be sent. */
 #define DATABYTETOSENDMASK      0x1F
 
 void vsendCommand(uint8_t Data[]);
@@ -38,14 +43,14 @@ typedef enum
 {
     Idle,
     sendSyncByte,
-    sendDatenbuffer
-    
+    sendDatenbuffer,
+    sendChecksum
 } eProtokollStates;
 
 TaskHandle_t xsendFrame;
 
-EventGroupHandle_t xQuamgenal_1;
-EventGroupHandle_t xQuamgenal_2;
+EventGroupHandle_t xQAMchannel_1;
+EventGroupHandle_t xQAMchannel_2;
 
 QueueHandle_t xQueue_Data;
 
@@ -167,8 +172,8 @@ void vQuamGen(void *pvParameters) {
 	initDACTimer();
 	initGenDMA();
     
-       xQuamgenal_1=xEventGroupCreate();
-       xQuamgenal_2=xEventGroupCreate();
+       xQAMchannel_1=xEventGroupCreate();
+       xQAMchannel_2=xEventGroupCreate();
        xQueue_Data = xQueueCreate( NR_OF_DATA_SAMPLES, sizeof( uint8_t ) );
     
         xTaskCreate(vsendFrame, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, &xsendFrame);
@@ -181,7 +186,7 @@ void vQuamGen(void *pvParameters) {
 void fillBuffer(uint16_t buffer[NR_OF_GENERATOR_SAMPLES]) {
     
     uint16_t Amp=1;
-    uint8_t  EventGroupBits= xEventGroupGetBitsFromISR(xQuamgenal_1);
+    uint8_t  EventGroupBits= xEventGroupGetBitsFromISR(xQAMchannel_1);
     if (EventGroupBits&AMPLITUDE_1)
     {
         Amp=1;
@@ -194,13 +199,13 @@ void fillBuffer(uint16_t buffer[NR_OF_GENERATOR_SAMPLES]) {
 	for(int i = 0; i < NR_OF_GENERATOR_SAMPLES;i++) {
 		buffer[i] = 0x800 + (Amp*sinLookup1000[i]);
 	}
-        xEventGroupSetBits(xQuamgenal_1,DATEN_AUFBEREITET);
+        xEventGroupSetBits(xQAMchannel_1,DATEN_AUFBEREITET);
 }
 
 // Mit ISR EventGroups arbeiten, da der Interrupt Buffer füllt
 void fillBuffer_1(uint16_t buffer[NR_OF_GENERATOR_SAMPLES]) {
     uint8_t Amp_1=1;
-    uint8_t  EventGroupBits= xEventGroupGetBitsFromISR(xQuamgenal_2);
+    uint8_t  EventGroupBits= xEventGroupGetBitsFromISR(xQAMchannel_2);
     
     if (EventGroupBits&AMPLITUDE_1)
     {
@@ -215,14 +220,12 @@ void fillBuffer_1(uint16_t buffer[NR_OF_GENERATOR_SAMPLES]) {
     for(int i = 0; i < NR_OF_GENERATOR_SAMPLES;i++) {
        buffer[i] = 0x800 + (Amp_1*sinLookup2000[i]); 
     }
-       xEventGroupSetBits(xQuamgenal_2,DATEN_AUFBEREITET);
+       xEventGroupSetBits(xQAMchannel_2,DATEN_AUFBEREITET);
    
 }
 
 ISR(DMA_CH0_vect)
 {
-	//static signed BaseType_t test;
-	
 	DMA.CH0.CTRLB|=0x10;
 	fillBuffer(&dacBuffer0[0]);
 }
@@ -257,18 +260,18 @@ void vsendCommand(uint8_t Data[])
 
 void vsendFrame(void *pvParameters)
 {
-    (void) pvParameters;
+(void) pvParameters;
     
-    uint8_t SendByteValue;
-    uint8_t SendBitPaketCounter;
-    uint8_t CheckVar=0;
-    uint8_t TempValue;
-    uint8_t DataByteCounter = 0;
-    uint8_t DataBytesToSend;
-    uint8_t BitCounter=0;
-    uint8_t IdleSendByte=0;     // Difference between 0xAF and 0x05
-    uint8_t Data[NR_OF_DATA_SAMPLES + 1] = {};
-    QueueHandle_t xQueue_Data;
+uint8_t ucSendByteValue;                    // Variable current byte to send is stored
+uint8_t ucSendBitPackageCounter = 0;        // Counts the sent bit packages, for QAM4 for 1 byte there are 4 packages (4 x 2bit = 8bit)
+uint8_t ucReadyForNewDataByte = 1;          // Indicates if new data byte can be provided.
+uint8_t ucNewDataByteValue = 0;             // Stores the new data byte value, which should be sent next.
+uint8_t ucDataByteCounter = 0;              // Counts the sent data of the data array.
+uint8_t ucDataBytesToSend;                  // Stores the value of how many data bytes should be sent. Extracted from command byte (1st array in data queue).
+uint8_t ucQAMChannelsReady = 0;             // Status register to check if both QAM channels got the new amplitude levels.
+uint8_t ucIdleSendByteFlag = 0;             // Byte for differentiation of idle bytes to be sent between 0xAF and 0x05.
+uint8_t ucChecksumValue = 0;                // Used for checksum calculation.
+uint8_t Data[NR_OF_DATA_SAMPLES + 1] = {};  // Data bytes received from queue.                
 
     
     eProtokollStates Protokoll = Idle;
@@ -276,50 +279,51 @@ void vsendFrame(void *pvParameters)
     while(1)
     {
         
-
-        
+        /************************************************************************/
+        /* State machine for setting up data.                                   */
+        /************************************************************************/
         switch(Protokoll)
         {
             case Idle:
             {
-                if (IdleSendByte == 0)
+                if (ucIdleSendByteFlag == 0)
                 {
-                    if (CheckVar >= 1)
+                    /* Send first idle byte. */
+                    if (ucReadyForNewDataByte)
                     {
-                        IdleSendByte = 1;
-                        TempValue = 0xAF;
-                        CheckVar=0;
+                        ucIdleSendByteFlag = 1;
+                        ucNewDataByteValue = 0xAF;
+                        ucReadyForNewDataByte = 0;
                     }
                 }
                 else
                 {
-                    if (CheckVar >= 1)
+                    /* Send second idle byte. */
+                    if (ucReadyForNewDataByte)
                     {
-                        IdleSendByte = 0;
-                        TempValue = 0x05;
-                        CheckVar=0;
-                            
-                        if (xQueueReceive(xQueue_Data,(void*)&Data,pdMS_TO_TICKS(0))==pdTRUE)
+                        ucIdleSendByteFlag = 0;
+                        ucNewDataByteValue = 0x05;
+                        ucReadyForNewDataByte = 0;
+                        
+                        
+                        /* Check if new Data was received. */
+                        if (xQueueReceive(xQueue_Data, (void*)&Data, pdMS_TO_TICKS(0)) == pdTRUE)
                         {
-                            DataBytesToSend = Data[0] & DATABYTETOSENDMASK;
-                            Protokoll=sendSyncByte;
+                            ucDataBytesToSend = Data[0] & DATABYTETOSENDMASK;
+                            Protokoll = sendSyncByte;
                         }                                
                     }
                 }
-                
-                //Receive Queue (uint8) 33Byts
-                //Check Temp Var in jedem Case
-                //Wechsel sobald send Data wieder Idle
                 break;
             }
             
             case sendSyncByte:
             {
-                if (CheckVar>=1)
+                if (ucReadyForNewDataByte)
                 {
-                    TempValue=0xFF;
-                    CheckVar=0;
-                    Protokoll=sendDatenbuffer;
+                    ucNewDataByteValue = 0xFF;
+                    ucReadyForNewDataByte = 0;
+                    Protokoll = sendDatenbuffer;
                 }
                 
                 break;
@@ -327,76 +331,106 @@ void vsendFrame(void *pvParameters)
             
             case sendDatenbuffer:
             {  
-                if (CheckVar>=1)
+                if (ucReadyForNewDataByte)
                 {
-                    if (DataByteCounter < DataBytesToSend)
+                    if (ucDataByteCounter < ucDataBytesToSend)
                     {
-                        TempValue = Data[DataByteCounter];
-                        CheckVar=0;
-                        DataByteCounter++;
+                        ucNewDataByteValue = Data[ucDataByteCounter];
+                        
+                        /* Continuous checksum calculation over all sent data bytes. */
+                        ucChecksumValue ^= ucNewDataByteValue;
+                        ucReadyForNewDataByte = 0;
+                        ucDataByteCounter++;
                     } 
                     else
                     {
-                        DataByteCounter = 0;
-                        Protokoll=Idle;
+                        ucDataByteCounter = 0;
+                        Protokoll = sendChecksum;
                     }
                 }
 
                 break;
             }
+            case sendChecksum:
+            {
+                if (ucReadyForNewDataByte)
+                {
+                    ucNewDataByteValue = ucChecksumValue;
+                    ucChecksumValue = 0;
+                    ucReadyForNewDataByte = 0;
+                    Protokoll = Idle;
+                }
+                break;
+            }
             default:
             {
-                Protokoll=Idle;
+                Protokoll = Idle;
                 break;
             }
 
         }
-        if (SendBitPaketCounter >= 3)
+        
+        
+        /************************************************************************/
+        /* Data send part.                                                      */
+        /************************************************************************/
+        
+        /* Check if all data bit packages of one byte were sent. */
+        if (ucSendBitPackageCounter > 3)
         {
-            SendByteValue = TempValue;
-            SendBitPaketCounter = 0;
-            CheckVar=1;
+            /* Then the new data byte can be loaded. */
+            ucSendByteValue = ucNewDataByteValue;
+            ucSendBitPackageCounter = 0;
+            ucReadyForNewDataByte = 1;
         }
-         
-        if (xEventGroupGetBits(xQuamgenal_1)&DATEN_AUFBEREITET)
+        
+        /* Check if QAM channel 1 got amplitude value. */
+        if (xEventGroupGetBits(xQAMchannel_1) & DATEN_AUFBEREITET)
         {
-             xEventGroupClearBits(xQuamgenal_1,DATEN_AUFBEREITET);
-             BitCounter+=1;
-             
-            if (SendByteValue& 0b00000001)
+            /* Then flag can be deleted an status can be stored temporarily. */
+            xEventGroupClearBits(xQAMchannel_1, DATEN_AUFBEREITET);
+            ucQAMChannelsReady |= QAMCHANNEL_1_READY;
+            
+            /* New amplitude level for next transmission can be prepared. */
+            if (ucSendByteValue & 0b00000001)
             {
-                xEventGroupSetBits(xQuamgenal_1,AMPLITUDE_2);
-                xEventGroupClearBits(xQuamgenal_1,AMPLITUDE_1);
+                xEventGroupSetBits(xQAMchannel_1, AMPLITUDE_2);
+                xEventGroupClearBits(xQAMchannel_1, AMPLITUDE_1);
             } 
             else
             {
-                xEventGroupSetBits(xQuamgenal_1,AMPLITUDE_1);
-                xEventGroupClearBits(xQuamgenal_1,AMPLITUDE_2);
+                xEventGroupSetBits(xQAMchannel_1, AMPLITUDE_1);
+                xEventGroupClearBits(xQAMchannel_1, AMPLITUDE_2);
             }
         }
-                
-        if (xEventGroupGetBits(xQuamgenal_2)&DATEN_AUFBEREITET)
+        
+        /* Check if QAM channel 2 got amplitude value. */
+        if (xEventGroupGetBits(xQAMchannel_2)&DATEN_AUFBEREITET)
         {
-            xEventGroupClearBits(xQuamgenal_2,DATEN_AUFBEREITET);
-            BitCounter+=1;
+            /* Then flag can be deleted an status can be stored temporarily. */
+            xEventGroupClearBits(xQAMchannel_2,DATEN_AUFBEREITET);
+            ucQAMChannelsReady |= QAMCHANNEL_2_READY;
             
-            if (SendByteValue& 0b00000010)
+            /* New amplitude level for next transmission can be prepared. */
+            if (ucSendByteValue & 0b00000010)
             {
-                xEventGroupSetBits(xQuamgenal_2,AMPLITUDE_2);
-                xEventGroupClearBits(xQuamgenal_2,AMPLITUDE_1);
+                xEventGroupSetBits(xQAMchannel_2, AMPLITUDE_2);
+                xEventGroupClearBits(xQAMchannel_2, AMPLITUDE_1);
             }
             else
             {
-                xEventGroupSetBits(xQuamgenal_2,AMPLITUDE_1);
-                xEventGroupClearBits(xQuamgenal_2,AMPLITUDE_2);
+                xEventGroupSetBits(xQAMchannel_2, AMPLITUDE_1);
+                xEventGroupClearBits(xQAMchannel_2, AMPLITUDE_2);
             }
         }        
         
-        if(BitCounter>=2)
+        /* Check if both channels got the new amplitude level. */
+        if((ucQAMChannelsReady & QAMCHANNEL_1_READY) && (ucQAMChannelsReady & QAMCHANNEL_2_READY))
         {
-            BitCounter=0;
-            SendBitPaketCounter++;
-            SendByteValue = SendByteValue >> 2;
+            /* Then new bit package can be prepared. */
+            ucQAMChannelsReady = 0;
+            ucSendBitPackageCounter++;
+            ucSendByteValue = ucSendByteValue >> 2;
         }
         
     }
