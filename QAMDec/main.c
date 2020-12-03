@@ -55,3 +55,24 @@ int main(void)
 	vTaskStartScheduler();
 	return 0;
 }
+
+
+void vControl(void* pvParameters) {
+uint8_t ucCommand;
+uint8_t ucReceivedDataBytes;
+uint8_t ucDataArray[32] = {};
+
+    while(1)
+    {
+        if(ucQAMGetData(&ucCommand, &ucReceivedDataBytes, ucDataArray) == pdTRUE)
+        {
+            vDisplayWriteStringAtPos(1, 0, "Command:   %d", ucCommand);
+            vDisplayWriteStringAtPos(2, 0, "DataBytes: %d", ucReceivedDataBytes);
+            for (uint8_t ucDataPrintCounter = 0; ucDataPrintCounter < ucReceivedDataBytes; ++ucDataPrintCounter)
+            {
+                vDisplayWriteStringAtPos(3, ucDataPrintCounter * 3, "%x", ucDataArray[ucDataPrintCounter]);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }   
+}    

@@ -62,7 +62,7 @@ typedef enum
     Checksum
 } eProtocolDecoderStates;
 
-uint16_t usQAMHalfMedianLevels[QAMLEVELS] = {123, 256, 781, 1236}; // TODO rank order: High freq / Low freq: LowVolt/LowVolt, LowVolt/HighVolt, HighVolt/LowVolt, High/High
+uint16_t usQAMHalfMedianLevels[QAMLEVELS] = {2631, 2895, 2945, 3212}; // TODO rank order: High freq / Low freq: LowVolt/LowVolt, LowVolt/HighVolt, HighVolt/LowVolt, High/High
 
 uint16_t adcBuffer0[DECODERSAMPLECOUNT];
 uint16_t adcBuffer1[DECODERSAMPLECOUNT];
@@ -244,6 +244,7 @@ uint8_t ucReceivedByte;
 uint8_t ucDataBytesReceived;
 uint8_t ucDataBytesCounter = 0;
 uint8_t ucCommandByte;
+uint8_t ucChecksumCalculated;
 uint8_t ucQueueBytes[MAXRECEIVEDATABYTES + 2] = {};
 
     receivedProtocolQueue = xQueueCreate(PROTOCOLSTOSTORE, sizeof(uint8_t) * (MAXRECEIVEDATABYTES + 2));
@@ -268,7 +269,9 @@ uint8_t ucQueueBytes[MAXRECEIVEDATABYTES + 2] = {};
                     ucCommandByte = (ucReceivedByte & COMMANDMASK) >> COMMANDBITPOSITION;
                     ucQueueBytes[COMMANDBYTEPOSITION] = ucCommandByte;
                     ucDataBytesReceived = ucReceivedByte & DATABYTESMASK;
-                    ucQueueBytes[DATABYTECOUNTPOSITION] = ucCommandByte;
+                    ucQueueBytes[DATABYTECOUNTPOSITION] = ucDataBytesReceived;
+                    
+                    ucChecksumCalculated = ucReceivedByte; 
                     if (ucDataBytesReceived > 0)
                     {
                         eProtocolDecoder = Data;
@@ -282,6 +285,7 @@ uint8_t ucQueueBytes[MAXRECEIVEDATABYTES + 2] = {};
                 case Data:
                 {
                     ucQueueBytes[DATABYTESTARTPOSITION + ucDataBytesCounter] = ucReceivedByte;
+                    ucChecksumCalculated ^= ucReceivedByte;
                     if (++ucDataBytesCounter >= ucDataBytesReceived)
                     {
                         eProtocolDecoder = Checksum;
@@ -290,9 +294,11 @@ uint8_t ucQueueBytes[MAXRECEIVEDATABYTES + 2] = {};
                 }
                 case Checksum:
                 {
-                    if (1)
-                    { // if Checksum valid
-                        xQueueSend(receivedByteQueue, (void*)&ucQueueBytes, pdMS_TO_TICKS(0));
+                    if (ucReceivedByte == ucChecksumCalculated)
+                    { // If the calculated checksum matches the received checksum.
+                        xQueueSend(receivedProtocolQueue, (void*)&ucQueueBytes, pdMS_TO_TICKS(0));
+                        ucDataBytesCounter = 0;
+                        eProtocolDecoder = Idle;
                     }
                     break;
                 }
@@ -340,7 +346,7 @@ uint16_t usSignalOffsetLevel = 2048;       // Offset Voltage
 		{
     		xQueueReceive(decoderQueue, &usReceiveArray[ucArrayReference], pdMS_TO_TICKS(0));
             if(bGetReceivedData(&usReceiveArray[0], &ucArrayReference, usSignalOffsetLevel, &usReceivedValueArray[0]) == TRANSITIONFOUND)
-            { // If data signal was received. */
+            { /* If data signal was received. */
                 
                 usMedianCompareValue = usMedian(usReceiveArray, MEDIANSAMPLECOMPARECOUNT);
                 ucActualQAMValue = ucAllocateValue(usMedianCompareValue);
