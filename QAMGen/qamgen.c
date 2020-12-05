@@ -202,7 +202,7 @@ void fillBuffer(uint16_t buffer[NR_OF_GENERATOR_SAMPLES]) {
         xEventGroupSetBits(xQAMchannel_1,DATEN_AUFBEREITET);
 }
 
-// Mit ISR EventGroups arbeiten, da der Interrupt Buffer füllt
+// Mit ISR EventGroups arbeiten, da der Interrupt Buffer fÃ¼llt
 void fillBuffer_1(uint16_t buffer[NR_OF_GENERATOR_SAMPLES]) {
     uint8_t Amp_1=1;
     uint8_t  EventGroupBits= xEventGroupGetBitsFromISR(xQAMchannel_2);
