@@ -174,7 +174,7 @@ void vQuamGen(void *pvParameters) {
     
        xQAMchannel_1=xEventGroupCreate();
        xQAMchannel_2=xEventGroupCreate();
-       xQueue_Data = xQueueCreate( NR_OF_DATA_SAMPLES, sizeof( uint8_t ) );
+       xQueue_Data = xQueueCreate( 1, sizeof(uint8_t)*NR_OF_DATA_SAMPLES);
     
         xTaskCreate(vsendFrame, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, &xsendFrame);
 	
@@ -202,7 +202,7 @@ void fillBuffer(uint16_t buffer[NR_OF_GENERATOR_SAMPLES]) {
         xEventGroupSetBits(xQAMchannel_1,DATEN_AUFBEREITET);
 }
 
-// Mit ISR EventGroups arbeiten, da der Interrupt Buffer füllt
+// Mit ISR EventGroups arbeiten, da der Interrupt Buffer fÃ¼llt
 void fillBuffer_1(uint16_t buffer[NR_OF_GENERATOR_SAMPLES]) {
     uint8_t Amp_1=1;
     uint8_t  EventGroupBits= xEventGroupGetBitsFromISR(xQAMchannel_2);
@@ -252,9 +252,9 @@ ISR(DMA_CH3_vect)
 void vsendCommand(uint8_t Data[])
 {
 
-    if( xQueue_Data != 0 )
+     if( xQueue_Data != 0 )
     {
-        xQueueSend(xQueue_Data, (void *)&Data,pdMS_TO_TICKS(10));
+        xQueueSend(xQueue_Data,(void *)Data,pdMS_TO_TICKS(10));
     }    
 }
 
@@ -307,7 +307,7 @@ uint8_t Data[NR_OF_DATA_SAMPLES + 1] = {};  // Data bytes received from queue.
                         
                         
                         /* Check if new Data was received. */
-                        if (xQueueReceive(xQueue_Data, (void*)&Data, pdMS_TO_TICKS(0)) == pdTRUE)
+                        if (xQueueReceive(xQueue_Data,Data, pdMS_TO_TICKS(0)) == pdTRUE)
                         {
                             ucDataBytesToSend = Data[0] & DATABYTETOSENDMASK;
                             Protokoll = sendSyncByte;
@@ -333,7 +333,7 @@ uint8_t Data[NR_OF_DATA_SAMPLES + 1] = {};  // Data bytes received from queue.
             {  
                 if (ucReadyForNewDataByte)
                 {
-                    if (ucDataByteCounter < ucDataBytesToSend)
+                    if (ucDataByteCounter <= ucDataBytesToSend)
                     {
                         ucNewDataByteValue = Data[ucDataByteCounter];
                         
