@@ -65,7 +65,7 @@ int main(void)//Hauptprogramm
     
  
 
-	xTaskCreate(vQuamGen, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, NULL);
+	xTaskCreate(vQuamGen, NULL, configMINIMAL_STACK_SIZE+500, NULL, 2, NULL);
     xTaskCreate(vSteuertask, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, &xSteuertask);
     xTaskCreate(vButtonTask, (const char *) "ButtonTask", configMINIMAL_STACK_SIZE, NULL, 2, &xButtonTaskHandle);
 
@@ -88,14 +88,15 @@ void vSteuertask(void *pvParameters)
     
     while(1)
     {
-        if (Buttonvalue&BUTTON1SHORTPRESSEDMASK)
-        {
+        //if (Buttonvalue&BUTTON1SHORTPRESSEDMASK)
+        //{
             DataString[0] = 0x83;   // Command + Amount of Data 0bXXXY'YYYY
             DataString[1] = 0xAB;
             DataString[2] = 0x37;
             DataString[3] = 0x85;
             vsendCommand(DataString);
-        }
+            vTaskDelay(500/portTICK_RATE_MS);
+       // }
     
     }    
     
