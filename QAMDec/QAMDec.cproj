@@ -283,9 +283,6 @@
     <Compile Include="includes\qamdec.h">
       <SubType>compile</SubType>
     </Compile>
-    <Compile Include="includes\qamgen.h">
-      <SubType>compile</SubType>
-    </Compile>
     <Compile Include="includes\utils.h">
       <SubType>compile</SubType>
     </Compile>
@@ -302,9 +299,6 @@
       <SubType>compile</SubType>
     </Compile>
     <Compile Include="qamdec.c">
-      <SubType>compile</SubType>
-    </Compile>
-    <Compile Include="qamgen.c">
       <SubType>compile</SubType>
     </Compile>
     <Compile Include="utils.c">

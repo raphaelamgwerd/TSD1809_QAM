@@ -26,7 +26,6 @@
 #include "errorHandler.h"
 #include "NHD0420Driver.h"
 
-#include "qamgen.h"
 #include "qamdec.h"
 
 
@@ -46,7 +45,6 @@ int main(void)
 	vInitDisplay();
 	
 	xTaskCreate(vQuamDec, NULL, configMINIMAL_STACK_SIZE+900, NULL, 3, NULL);
-	//xTaskCreate(vQuamGen, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, NULL);
     xTaskCreate(vControl, NULL, configMINIMAL_STACK_SIZE, NULL, 2, NULL);
 	
 	vDisplayClear();

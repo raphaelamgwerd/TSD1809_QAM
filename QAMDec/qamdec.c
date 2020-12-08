@@ -62,7 +62,7 @@ typedef enum
     Checksum
 } eProtocolDecoderStates;
 
-uint16_t usQAMHalfMedianLevels[QAMLEVELS] = {2631, 2895, 2945, 3212}; // TODO rank order: High freq / Low freq: LowVolt/LowVolt, LowVolt/HighVolt, HighVolt/LowVolt, High/High
+uint16_t usQAMHalfMedianLevels[QAMLEVELS] = {2550, 2760, 2850, 2930};//{2631, 2895, 2945, 3212}; // TODO rank order: High freq / Low freq: LowVolt/LowVolt, LowVolt/HighVolt, HighVolt/LowVolt, High/High
 
 uint16_t adcBuffer0[DECODERSAMPLECOUNT];
 uint16_t adcBuffer1[DECODERSAMPLECOUNT];
@@ -179,12 +179,14 @@ uint16_t usCompareValue = 0xFFFF;
 void vOffsetLevelAdjust(uint16_t usReceivedValueArray[], uint16_t* usSignalOffsetLevel)
 {
 uint16_t usTempValueArray[DECODERSAMPLECOUNT] = {};  // Array to copy received data
-    
+uint16_t usTempSignalOffset;
+
     for (uint8_t ucArrayCopyCounter = 0; ucArrayCopyCounter < DECODERSAMPLECOUNT; ++ucArrayCopyCounter)
     {
         usTempValueArray[ucArrayCopyCounter] = usReceivedValueArray[ucArrayCopyCounter];
     }
-    *usSignalOffsetLevel = usMedian(usTempValueArray, DECODERSAMPLECOUNT);
+    usTempSignalOffset = usMedian(usTempValueArray, DECODERSAMPLECOUNT);
+    *usSignalOffsetLevel = ((*usSignalOffsetLevel * 5) + usTempSignalOffset) / 6;
 }
 
 uint8_t bGetReceivedData(uint16_t usReceiveArray[], uint8_t* ucActualArrayPos, uint16_t* usSignalOffsetLevel, uint16_t usReceivedValueArray[])
@@ -200,7 +202,10 @@ uint8_t ucTransitionFound = TRANSITIONNOTFOUND;
         {
             if (usReceiveArray[ucDataCounter] <= *usSignalOffsetLevel)
             {
-                ucTransitionFound = TRANSITIONFOUND;
+                if (usReceiveArray[ucDataCounter + 4] > usReceiveArray[ucDataCounter + 4 + (DECODERSAMPLECOUNT / 2)])
+                {
+                    ucTransitionFound = TRANSITIONFOUND;
+                }
             }
         }
         ++ucDataCounter;
@@ -223,7 +228,14 @@ uint8_t ucTransitionFound = TRANSITIONNOTFOUND;
             }            
         }
         /* Set new reference position in receive array. */
-        *ucActualArrayPos = ucDataCounter;
+        if (ucDataCounter == 0)
+        {
+            *ucActualArrayPos = 0;
+        }
+        else
+        {
+            *ucActualArrayPos -= ucDataCounter;
+        }
     }
     else
     { // If no complete signal was detected, increase new reference position in array. */
