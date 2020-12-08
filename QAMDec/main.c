@@ -31,6 +31,7 @@
 
 
 extern void vApplicationIdleHook( void );
+void vControl(void* pvParameters);
 
 void vApplicationIdleHook( void )
 {	
@@ -44,8 +45,9 @@ int main(void)
 	vInitClock();
 	vInitDisplay();
 	
-	xTaskCreate(vQuamDec, NULL, configMINIMAL_STACK_SIZE+100, NULL, 3, NULL);
+	xTaskCreate(vQuamDec, NULL, configMINIMAL_STACK_SIZE+900, NULL, 3, NULL);
 	//xTaskCreate(vQuamGen, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, NULL);
+    xTaskCreate(vControl, NULL, configMINIMAL_STACK_SIZE, NULL, 2, NULL);
 	
 	vDisplayClear();
 	vDisplayWriteStringAtPos(0,0,"FreeRTOS 10.0.1");

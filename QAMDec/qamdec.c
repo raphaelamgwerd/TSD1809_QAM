@@ -45,7 +45,7 @@
 #define COMMANDBITPOSITION              5
 #define DATABYTESMASK                   0x1F
 #define MAXRECEIVEDATABYTES             32
-#define PROTOCOLSTOSTORE                16  /* can store 16 received messages without getting them */
+#define PROTOCOLSTOSTORE                1   /* can store 16 received messages without getting them */
 #define COMMANDBYTEPOSITION             0   /* position in protocol queue */
 #define DATABYTECOUNTPOSITION           1
 #define DATABYTESTARTPOSITION           2
@@ -74,7 +74,7 @@ QueueHandle_t receivedProtocolQueue;
 void initADC(void) {
 	ADCA.CTRLA = 0x01;
 	ADCA.CTRLB = 0x00;
-	ADCA.REFCTRL = 0x10; //INTVCC = 2V as Reference
+	ADCA.REFCTRL = 0x20;  //INTVCC = External reference from AREF pin on PORT A (Vcc)
 	ADCA.PRESCALER = 0x03;
 	ADCA.EVCTRL = 0x39; //Event Channel 7 triggers Channel 0 Conversion
 	ADCA.CH0.CTRL = 0x01; //Singleended positive input without gain
@@ -161,7 +161,7 @@ uint16_t usMedianDifference;
 uint16_t usCompareValue = 0xFFFF;
     
     /* Check for each QAM level, which median level is nearest. */
-    for(uint8_t ucQAMLevelCounter; ucQAMLevelCounter < QAMLEVELS; ++ucQAMLevelCounter)
+    for(uint8_t ucQAMLevelCounter = 0; ucQAMLevelCounter < QAMLEVELS; ++ucQAMLevelCounter)
     {
         /* Calculate difference of median value and reference value of actual iteration. */
         usMedianDifference = abs(usMedianValue - usQAMHalfMedianLevels[ucQAMLevelCounter]);
@@ -176,15 +176,29 @@ uint16_t usCompareValue = 0xFFFF;
     return ucQAMLevel;
 }
 
-uint8_t bGetReceivedData(uint16_t usReceiveArray[], uint8_t* ucActualArrayPos, uint16_t usSignalOffsetLevel, uint16_t usReceivedValueArray[])
+void vOffsetLevelAdjust(uint16_t usReceivedValueArray[], uint16_t* usSignalOffsetLevel)
+{
+uint16_t usTempValueArray[DECODERSAMPLECOUNT] = {};  // Array to copy received data
+    
+    for (uint8_t ucArrayCopyCounter = 0; ucArrayCopyCounter < DECODERSAMPLECOUNT; ++ucArrayCopyCounter)
+    {
+        usTempValueArray[ucArrayCopyCounter] = usReceivedValueArray[ucArrayCopyCounter];
+    }
+    *usSignalOffsetLevel = usMedian(usTempValueArray, DECODERSAMPLECOUNT);
+}
+
+uint8_t bGetReceivedData(uint16_t usReceiveArray[], uint8_t* ucActualArrayPos, uint16_t* usSignalOffsetLevel, uint16_t usReceivedValueArray[])
 {
 uint8_t ucDataCounter = 0;
 uint8_t ucTransitionFound = TRANSITIONNOTFOUND;
 
+    /* Find new reference value and copy new array */
+    vOffsetLevelAdjust(&usReceiveArray[*ucActualArrayPos], usSignalOffsetLevel);
+    
     do {
-        if (usReceiveArray[ucDataCounter + 1] > usSignalOffsetLevel)
+        if (usReceiveArray[ucDataCounter + 1] > *usSignalOffsetLevel)
         {
-            if (usReceiveArray[ucDataCounter] <= usSignalOffsetLevel)
+            if (usReceiveArray[ucDataCounter] <= *usSignalOffsetLevel)
             {
                 ucTransitionFound = TRANSITIONFOUND;
             }
@@ -192,7 +206,7 @@ uint8_t ucTransitionFound = TRANSITIONNOTFOUND;
         ++ucDataCounter;
         /* Repeat as long as no transition (start of signal = sine-transition) was found
            or no complete signal could be found. */
-    } while ((ucTransitionFound == TRANSITIONNOTFOUND) && ((ucDataCounter - 1) <= (*ucActualArrayPos)));
+    } while ((ucTransitionFound == TRANSITIONNOTFOUND) && ((ucDataCounter - 1) < (*ucActualArrayPos)));
     
     --ucDataCounter; // correct position of found transition
     
@@ -203,21 +217,19 @@ uint8_t ucTransitionFound = TRANSITIONNOTFOUND;
         for (uint8_t ucArrayCopyCounter = 0; ucArrayCopyCounter < DECODERSAMPLECOUNT; ++ucArrayCopyCounter)
         {
             usReceivedValueArray[ucArrayCopyCounter] = usReceiveArray[ucDataCounter + ucArrayCopyCounter];
-            usReceiveArray[ucArrayCopyCounter] = usReceiveArray[ucDataCounter + DECODERSAMPLECOUNT];
+            if ((ucArrayCopyCounter < (DECODERSAMPLECOUNT - ucDataCounter)) && (ucArrayCopyCounter < *ucActualArrayPos))
+            {
+                usReceiveArray[ucArrayCopyCounter] = usReceiveArray[ucDataCounter + ucArrayCopyCounter + DECODERSAMPLECOUNT];
+            }            
         }
         /* Set new reference position in receive array. */
         *ucActualArrayPos = ucDataCounter;
     }
     else
     { // If no complete signal was detected, increase new reference position in array. */
-        *ucActualArrayPos += DECODERSAMPLECOUNT;
+        *ucActualArrayPos = (*ucActualArrayPos <= (5 * DECODERSAMPLECOUNT)) ? *ucActualArrayPos + DECODERSAMPLECOUNT : 0;
     }
     return ucTransitionFound;
-}
-
-void vOffsetLevelAdjust(uint16_t usReceivedValueArray[], uint16_t* usSignalOffsetLevel)
-{
-    *usSignalOffsetLevel = usMedian(usReceivedValueArray, DECODERSAMPLECOUNT);
 }
 
 uint8_t ucQAMGetData(uint8_t* ucCommand, uint8_t* ucDataBytes, uint8_t ucDataArray[])
@@ -317,7 +329,7 @@ uint8_t ucQueueBytes[MAXRECEIVEDATABYTES + 2] = {};
 }
 
 void vQuamDec(void* pvParameters) {
-uint16_t usReceiveArray[2 * DECODERSAMPLECOUNT] = {};
+uint16_t usReceiveArray[7 * DECODERSAMPLECOUNT] = {};
 uint8_t ucArrayReference = 0;           // reference state of array
 uint16_t usReceivedValueArray[DECODERSAMPLECOUNT] = {};  // current received data
 
@@ -325,15 +337,16 @@ uint16_t usMedianCompareValue;
 uint8_t ucActualQAMValue;
 
 uint8_t ucQAMLevelCalibArrayCounter = 0;
-uint16_t usQAMLevelsForCalibration[8] = {};
+uint16_t usQAMLevelsForCalibration[16] = {};
 uint16_t usQAMCalibTriggerValue = 0;
+uint8_t ucByteswoCalibration = 0;
 
-uint8_t ucDataByte;                         // received data byte
+uint8_t ucDataByte = 0;                     // received data byte
 uint8_t ucReceivedBitPackageCounter = 0;    // Counts amount of bit packages.
 
 uint16_t usSignalOffsetLevel = 2048;       // Offset Voltage
     
-	decoderQueue = xQueueCreate(COMPLETESAMPLECOUNT, DECODERSAMPLECOUNT*sizeof(int16_t));
+	decoderQueue = xQueueCreate(1, DECODERSAMPLECOUNT*sizeof(int16_t));
     receivedByteQueue = xQueueCreate(DATABYTEQUEUELENGTH, sizeof(uint8_t));
 	
 	initDecDMA();
@@ -342,29 +355,30 @@ uint16_t usSignalOffsetLevel = 2048;       // Offset Voltage
     xTaskCreate(xProtocolDecoder, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, NULL);
     
 	for(;;) {
-		if (!uxQueueMessagesWaiting(decoderQueue))
+		if (uxQueueMessagesWaiting(decoderQueue))
 		{
     		xQueueReceive(decoderQueue, &usReceiveArray[ucArrayReference], pdMS_TO_TICKS(0));
-            if(bGetReceivedData(&usReceiveArray[0], &ucArrayReference, usSignalOffsetLevel, &usReceivedValueArray[0]) == TRANSITIONFOUND)
+            if(bGetReceivedData(&usReceiveArray[0], &ucArrayReference, &usSignalOffsetLevel, &usReceivedValueArray[0]) == TRANSITIONFOUND)
             { /* If data signal was received. */
                 
-                usMedianCompareValue = usMedian(usReceiveArray, MEDIANSAMPLECOMPARECOUNT);
+                usMedianCompareValue = usMedian(usReceivedValueArray, MEDIANSAMPLECOMPARECOUNT);
                 ucActualQAMValue = ucAllocateValue(usMedianCompareValue);
                 
                 ucDataByte = (ucDataByte << 2) + ucActualQAMValue;      // fill data byte by left shift (LSB protocol)
                 usQAMCalibTriggerValue = (usQAMCalibTriggerValue << 2) + ucActualQAMValue;
                 usQAMLevelsForCalibration[ucQAMLevelCalibArrayCounter] = usMedianCompareValue;
-                ucQAMLevelCalibArrayCounter = (ucQAMLevelCalibArrayCounter < 7) ? ucQAMLevelCalibArrayCounter + 1 : 0; 
+                ucQAMLevelCalibArrayCounter = (ucQAMLevelCalibArrayCounter < 15) ? ucQAMLevelCalibArrayCounter + 1 : 0; 
                 
                 if (++ucReceivedBitPackageCounter >= QAMPACKAGESPERBYTE)
                 {
                     ucReceivedBitPackageCounter = 0;
-                    ucDataByte = 0;
                     xQueueSend(receivedByteQueue, (void*)&ucDataByte, pdMS_TO_TICKS(0));
+                    ucDataByte = 0;
                 }
                 
                 if (usQAMCalibTriggerValue == CALIBRATIONSIGNAL)
                 {
+                    usQAMCalibTriggerValue = 0;
                     /* Set new reference values for all QAM levels. */
                     for (int8_t ucSetMedianRefCounter = 0; ucSetMedianRefCounter < 8; ucSetMedianRefCounter+=2)
                     {
@@ -378,9 +392,16 @@ uint16_t usSignalOffsetLevel = 2048;       // Offset Voltage
                         }
                     }
                 }
-                
+                else
+                {
+                    if (++ucByteswoCalibration >= (16))
+                    {
+                        ucByteswoCalibration = 0;
+                    }
+                }
                 /* Find new reference value and copy new array */
-                vOffsetLevelAdjust(usReceivedValueArray, &usSignalOffsetLevel);
+                //vOffsetLevelAdjust(usReceivedValueArray, &usSignalOffsetLevel);
+                
             }
 		}
         else
