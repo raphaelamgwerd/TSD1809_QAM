@@ -11,6 +11,7 @@
 
 void vQuamDec(void* pvParameters);
 
+uint8_t ucQAMGetData(uint8_t* ucCommand, uint8_t* ucDataBytes, uint8_t ucDataArray[]);
 
 
 #endif /* QAMDEC_H_ */
