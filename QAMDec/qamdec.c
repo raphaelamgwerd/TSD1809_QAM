@@ -62,7 +62,7 @@ typedef enum
     Checksum
 } eProtocolDecoderStates;
 
-uint16_t usQAMHalfMedianLevels[QAMLEVELS] = {2550, 2760, 2850, 2930};//{2631, 2895, 2945, 3212}; // TODO rank order: High freq / Low freq: LowVolt/LowVolt, LowVolt/HighVolt, HighVolt/LowVolt, High/High
+uint16_t usQAMHalfMedianLevels[QAMLEVELS] = {2760, 2870, 2850, 2930};//{2631, 2895, 2945, 3212}; // TODO rank order: High freq / Low freq: LowVolt/LowVolt, LowVolt/HighVolt, HighVolt/LowVolt, High/High
 
 uint16_t adcBuffer0[DECODERSAMPLECOUNT];
 uint16_t adcBuffer1[DECODERSAMPLECOUNT];
@@ -197,6 +197,8 @@ uint8_t ucTransitionFound = TRANSITIONNOTFOUND;
     /* Find new reference value and copy new array */
     vOffsetLevelAdjust(&usReceiveArray[*ucActualArrayPos], usSignalOffsetLevel);
     
+    ucDataCounter = (*ucActualArrayPos >= DECODERSAMPLECOUNT) ? (*ucActualArrayPos - DECODERSAMPLECOUNT) : 0;
+    
     do {
         if (usReceiveArray[ucDataCounter + 1] > *usSignalOffsetLevel)
         {
@@ -222,20 +224,29 @@ uint8_t ucTransitionFound = TRANSITIONNOTFOUND;
         for (uint8_t ucArrayCopyCounter = 0; ucArrayCopyCounter < DECODERSAMPLECOUNT; ++ucArrayCopyCounter)
         {
             usReceivedValueArray[ucArrayCopyCounter] = usReceiveArray[ucDataCounter + ucArrayCopyCounter];
-            if ((ucArrayCopyCounter < (DECODERSAMPLECOUNT - ucDataCounter)) && (ucArrayCopyCounter < *ucActualArrayPos))
+        }
+        if (*ucActualArrayPos <= (5 * DECODERSAMPLECOUNT))
+        {
+            *ucActualArrayPos += DECODERSAMPLECOUNT;
+        }
+        else
+        {
+            uint8_t ucArrayDifference = *ucActualArrayPos - ucDataCounter;
+            for (uint8_t ucArrayCopyCounter = 0; ucArrayCopyCounter < ucArrayDifference; ++ucArrayCopyCounter)
             {
-                usReceiveArray[ucArrayCopyCounter] = usReceiveArray[ucDataCounter + ucArrayCopyCounter + DECODERSAMPLECOUNT];
-            }            
+                usReceiveArray[ucArrayCopyCounter] = usReceiveArray[ucDataCounter + DECODERSAMPLECOUNT - 4 + ucArrayCopyCounter];
+            }
+            *ucActualArrayPos = ucArrayDifference;
         }
         /* Set new reference position in receive array. */
-        if (ucDataCounter == 0)
+        /*if (ucDataCounter == 0)
         {
             *ucActualArrayPos = 0;
         }
         else
         {
             *ucActualArrayPos -= ucDataCounter;
-        }
+        }*/
     }
     else
     { // If no complete signal was detected, increase new reference position in array. */
@@ -356,7 +367,7 @@ uint8_t ucByteswoCalibration = 0;
 uint8_t ucDataByte = 0;                     // received data byte
 uint8_t ucReceivedBitPackageCounter = 0;    // Counts amount of bit packages.
 
-uint16_t usSignalOffsetLevel = 2048;       // Offset Voltage
+uint16_t usSignalOffsetLevel = 2500;       // Offset Voltage
     
 	decoderQueue = xQueueCreate(1, DECODERSAMPLECOUNT*sizeof(int16_t));
     receivedByteQueue = xQueueCreate(DATABYTEQUEUELENGTH, sizeof(uint8_t));
@@ -376,8 +387,8 @@ uint16_t usSignalOffsetLevel = 2048;       // Offset Voltage
                 usMedianCompareValue = usMedian(usReceivedValueArray, MEDIANSAMPLECOMPARECOUNT);
                 ucActualQAMValue = ucAllocateValue(usMedianCompareValue);
                 
-                ucDataByte = (ucDataByte << 2) + ucActualQAMValue;      // fill data byte by left shift (LSB protocol)
-                usQAMCalibTriggerValue = (usQAMCalibTriggerValue << 2) + ucActualQAMValue;
+                ucDataByte = (ucDataByte >> 2) | (ucActualQAMValue << 6);      // fill data byte by left shift (LSB protocol)
+                usQAMCalibTriggerValue = (usQAMCalibTriggerValue >> 2) | (ucActualQAMValue << 14);
                 usQAMLevelsForCalibration[ucQAMLevelCalibArrayCounter] = usMedianCompareValue;
                 ucQAMLevelCalibArrayCounter = (ucQAMLevelCalibArrayCounter < 15) ? ucQAMLevelCalibArrayCounter + 1 : 0; 
                 
@@ -391,16 +402,26 @@ uint16_t usSignalOffsetLevel = 2048;       // Offset Voltage
                 if (usQAMCalibTriggerValue == CALIBRATIONSIGNAL)
                 {
                     usQAMCalibTriggerValue = 0;
+                    ucReceivedBitPackageCounter = 0;
                     /* Set new reference values for all QAM levels. */
+                    uint8_t ucQAMLevelArrayPos = 1;
                     for (int8_t ucSetMedianRefCounter = 0; ucSetMedianRefCounter < 8; ucSetMedianRefCounter+=2)
                     {
                         if (ucSetMedianRefCounter + ucQAMLevelCalibArrayCounter < 8)
                         {
-                            usQAMHalfMedianLevels[ucSetMedianRefCounter] = (usQAMLevelsForCalibration[ucSetMedianRefCounter + ucQAMLevelCalibArrayCounter] + usQAMLevelsForCalibration[ucSetMedianRefCounter + 1 + ucQAMLevelCalibArrayCounter]) / 2;
+                            usQAMHalfMedianLevels[ucQAMLevelArrayPos] = (usQAMLevelsForCalibration[ucSetMedianRefCounter + ucQAMLevelCalibArrayCounter] + usQAMLevelsForCalibration[ucSetMedianRefCounter + 1 + ucQAMLevelCalibArrayCounter]) / 2;
                         }
                         else
                         {
-                            usQAMHalfMedianLevels[ucSetMedianRefCounter] = (usQAMLevelsForCalibration[ucSetMedianRefCounter + ucQAMLevelCalibArrayCounter - 8] + usQAMLevelsForCalibration[ucSetMedianRefCounter + 1 + ucQAMLevelCalibArrayCounter - 8]) / 2;
+                            usQAMHalfMedianLevels[ucQAMLevelArrayPos] = (usQAMLevelsForCalibration[ucSetMedianRefCounter + ucQAMLevelCalibArrayCounter - 8] + usQAMLevelsForCalibration[ucSetMedianRefCounter + 1 + ucQAMLevelCalibArrayCounter - 8]) / 2;
+                        }
+                        switch (ucQAMLevelArrayPos)
+                        {
+                            case 0: ucQAMLevelArrayPos=3; break;
+                            case 1: ucQAMLevelArrayPos=0; break;
+                            case 2: ucQAMLevelArrayPos=1; break;
+                            case 3: ucQAMLevelArrayPos=2; break;
+                            default: break;
                         }
                     }
                 }
