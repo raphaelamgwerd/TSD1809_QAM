@@ -176,10 +176,10 @@ void vQuamGen(void *pvParameters) {
        xQAMchannel_2=xEventGroupCreate();
        xQueue_Data = xQueueCreate( 1, sizeof(uint8_t)*NR_OF_DATA_SAMPLES);
     
-        xTaskCreate(vsendFrame, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, &xsendFrame);
+        xTaskCreate(vsendFrame, NULL, configMINIMAL_STACK_SIZE+400, NULL, 2, &xsendFrame);
 	
 	for(;;) {
-		vTaskDelay(10/portTICK_RATE_MS);
+		vTaskDelay(1000/portTICK_RATE_MS);
 	}
 }
 
@@ -432,6 +432,6 @@ uint8_t Data[NR_OF_DATA_SAMPLES + 1] = {};  // Data bytes received from queue.
             ucSendBitPackageCounter++;
             ucSendByteValue = ucSendByteValue >> 2;
         }
-        
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }    

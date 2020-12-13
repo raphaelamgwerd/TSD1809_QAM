@@ -75,7 +75,7 @@ int main(void)//Hauptprogramm
     
  
 
-	xTaskCreate(vQuamGen, NULL, configMINIMAL_STACK_SIZE+500, NULL, 2, NULL);
+	xTaskCreate(vQuamGen, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, NULL);
     xTaskCreate(vSteuertask, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, &xSteuertask);
     xTaskCreate(vButtonTask, (const char *) "ButtonTask", configMINIMAL_STACK_SIZE, NULL, 2, &xButtonTaskHandle);
 
@@ -100,6 +100,9 @@ void vSteuertask(void *pvParameters)
     
     while(1)
     {
+        
+        xTaskNotifyWait(0, 0xffffffff, &Buttonvalue, pdMS_TO_TICKS(200));
+        
 		switch(Steuerung)
 		{
 			
@@ -124,6 +127,7 @@ void vSteuertask(void *pvParameters)
 					DataString[2] = 0x37;
 					DataString[3] = 0x85;
 				
+				    Steuerung = writedata;
 				}
 			break;	
 			}
@@ -132,6 +136,7 @@ void vSteuertask(void *pvParameters)
 			{
 				if (Buttonvalue&BUTTON2SHORTPRESSEDMASK)
 				{
+                    DataString[0] = 0x2F;
 					DataString[1] = 0x57;
 					DataString[2] = 0x6F;
 					DataString[3] = 0x2D;
@@ -156,6 +161,7 @@ void vSteuertask(void *pvParameters)
 			{
 				if (Buttonvalue&BUTTON3SHORTPRESSEDMASK)
 				{
+    				DataString[0] = 0x5F;
 					DataString[1] = 0x4D;
 					DataString[2] = 0x65;
 					DataString[3] = 0x69;
@@ -187,7 +193,6 @@ void vSteuertask(void *pvParameters)
 					DataString[29] = 0x2E;
 					DataString[30] = 0x30;
 					DataString[31] = 0x2D;
-					DataString[32] = 0x42;
 				
 					Steuerung = writedata;
 				
