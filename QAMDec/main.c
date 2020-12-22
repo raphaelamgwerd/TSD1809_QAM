@@ -32,6 +32,9 @@
 extern void vApplicationIdleHook( void );
 void vControl(void* pvParameters);
 
+volatile TaskHandle_t xQAMdecHandle;
+volatile TaskHandle_t xProtocolTaskHandle;
+
 void vApplicationIdleHook( void )
 {	
 	
@@ -44,8 +47,9 @@ int main(void)
 	vInitClock();
 	vInitDisplay();
 	
-	xTaskCreate(vQuamDec, NULL, configMINIMAL_STACK_SIZE+1200, NULL, 3, NULL);
+	xTaskCreate(vQuamDec, (const char *) "QAMDecoder", configMINIMAL_STACK_SIZE+900, NULL, 2, NULL/*&xQAMdecHandle*/);
     xTaskCreate(vControl, NULL, configMINIMAL_STACK_SIZE, NULL, 2, NULL);
+    xTaskCreate(xProtocolDecoder, (const char *) "ProtocolDecoder", configMINIMAL_STACK_SIZE+00, NULL, 2, NULL/*&xProtocolTaskHandle*/);
 	
 	vDisplayClear();
 	vDisplayWriteStringAtPos(0,0,"FreeRTOS 10.0.1");
@@ -66,11 +70,16 @@ uint8_t ucDataArray[32] = {};
     {
         if(ucQAMGetData(&ucCommand, &ucReceivedDataBytes, ucDataArray) == pdTRUE)
         {
-            vDisplayWriteStringAtPos(1, 0, "Command:   %d", ucCommand);
-            vDisplayWriteStringAtPos(2, 0, "DataBytes: %d", ucReceivedDataBytes);
-            for (uint8_t ucDataPrintCounter = 0; ucDataPrintCounter < ucReceivedDataBytes; ++ucDataPrintCounter)
+            if (ucCommand != 0)
             {
-                vDisplayWriteStringAtPos(3, ucDataPrintCounter * 3, "%x", ucDataArray[ucDataPrintCounter]);
+                vDisplayWriteStringAtPos(1, 0, "Command:   %d", ucCommand);
+                vDisplayWriteStringAtPos(2, 0, "DataBytes: %d", ucReceivedDataBytes);
+                for (uint8_t ucDataPrintCounter = 0; ucDataPrintCounter < ucReceivedDataBytes; ++ucDataPrintCounter)
+                {
+                    vDisplayWriteStringAtPos(3, ucDataPrintCounter * 2, "%x", ucDataArray[ucDataPrintCounter]);
+                }
+                ucCommand = 0;
+                ucReceivedDataBytes = 0;
             }
         }
         vTaskDelay(pdMS_TO_TICKS(200));
