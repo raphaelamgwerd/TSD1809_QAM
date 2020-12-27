@@ -48,14 +48,14 @@ int main(void)
 	vInitDisplay();
 	
 	xTaskCreate(vQuamDec, (const char *) "QAMDecoder", configMINIMAL_STACK_SIZE+900, NULL, 2, NULL/*&xQAMdecHandle*/);
-    xTaskCreate(vControl, NULL, configMINIMAL_STACK_SIZE, NULL, 2, NULL);
+    xTaskCreate(vControl, NULL, configMINIMAL_STACK_SIZE+000, NULL, 2, NULL);
     xTaskCreate(xProtocolDecoder, (const char *) "ProtocolDecoder", configMINIMAL_STACK_SIZE+00, NULL, 2, NULL/*&xProtocolTaskHandle*/);
 	
 	vDisplayClear();
-	vDisplayWriteStringAtPos(0,0,"FreeRTOS 10.0.1");
-	vDisplayWriteStringAtPos(1,0,"EDUBoard 1.0");
-	vDisplayWriteStringAtPos(2,0,"QAMDEC-Base");
-	vDisplayWriteStringAtPos(3,0,"ResetReason: %d", reason);
+	vDisplayWriteStringAtPos(0,0,"QAM 4 Decoder  R: %d", reason);
+	//vDisplayWriteStringAtPos(1,0,"EDUBoard 1.0");
+	//vDisplayWriteStringAtPos(2,0,"QAMDEC-Base");
+	//vDisplayWriteStringAtPos(3,0,"ResetReason: %d", reason);
 	vTaskStartScheduler();
 	return 0;
 }
@@ -72,16 +72,19 @@ uint8_t ucDataArray[32] = {};
         {
             if (ucCommand != 0)
             {
-                vDisplayWriteStringAtPos(1, 0, "Command:   %d", ucCommand);
-                vDisplayWriteStringAtPos(2, 0, "DataBytes: %d", ucReceivedDataBytes);
+                vDisplayWriteStringAtPos(1, 0, "Command:   %d ", ucCommand);
+                vDisplayWriteStringAtPos(2, 0, "DataBytes: %d ", ucReceivedDataBytes);
                 for (uint8_t ucDataPrintCounter = 0; ucDataPrintCounter < ucReceivedDataBytes; ++ucDataPrintCounter)
                 {
-                    vDisplayWriteStringAtPos(3, ucDataPrintCounter * 2, "%x", ucDataArray[ucDataPrintCounter]);
+                    if (ucDataPrintCounter < ucReceivedDataBytes)
+                    {
+                        vDisplayWriteStringAtPos(3, ucDataPrintCounter * 2, "%x", ucDataArray[ucDataPrintCounter]);
+                    }
                 }
                 ucCommand = 0;
                 ucReceivedDataBytes = 0;
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }   
 }    

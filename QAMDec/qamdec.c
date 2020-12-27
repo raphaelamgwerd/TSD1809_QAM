@@ -62,19 +62,17 @@ typedef enum
     Checksum
 } eProtocolDecoderStates;
 
-uint16_t usQAMHalfMedianLevels[QAMLEVELS] = {2865, 3450, 3190, 3630};//{2631, 2895, 2945, 3212}; // TODO rank order: High freq / Low freq: LowVolt/LowVolt, LowVolt/HighVolt, HighVolt/LowVolt, High/High
 
-uint16_t ucLongTimeMaxValue = 750;
-uint16_t ucAbsoulteMaxValue = 1438;
+uint16_t ucLongTimeMaxValue = 750;  // This value will be adjusted to the absolute maximum value of QAM Level 3.
+uint16_t ucAbsoulteMaxValue = 1438; // This value is the maximum value of compare array of QAM Level 3. (see below)
 int16_t sDataReference0[DECODERSAMPLECOUNT] = {   0,  237,  447,  606,  700,  719,  668,  559,  410,  245,   88,  -37, -120, -150, -133,  -77,    0,   77,  133,  150,  120,   37,  -88, -245, -410, -559, -668, -719, -700, -606, -447, -237};
-int16_t sDataReference2[DECODERSAMPLECOUNT] = {   0,  393,  736,  985, 1109, 1098,  957,  715,  410,   89, -201, -416, -529, -529, -422, -233,    0,  233,  422,  529,  529,  416,  201,  -89, -410, -715, -957, -1098, -1109, -985, -736, -393};
 int16_t sDataReference1[DECODERSAMPLECOUNT] = {   0,  317,  603,  833,  989, 1059, 1047,  960,  819,  646,  467,  303,  169,   77,   23,    3,    0,   -3,  -23,  -77, -169, -303, -467, -646, -819, -960, -1047, -1059, -989, -833, -603, -317};
+int16_t sDataReference2[DECODERSAMPLECOUNT] = {   0,  393,  736,  985, 1109, 1098,  957,  715,  410,   89, -201, -416, -529, -529, -422, -233,    0,  233,  422,  529,  529,  416,  201,  -89, -410, -715, -957, -1098, -1109, -985, -736, -393};
 int16_t sDataReference3[DECODERSAMPLECOUNT] = {   0,  473,  892, 1212, 1398, 1438, 1336, 1116,  819,  490,  178,  -76, -240, -302, -266, -153,    0,  153,  266,  302,  240,   76, -178, -490, -819, -1116, -1336, -1438, -1398, -1212, -892, -473};
 
 uint16_t adcBuffer0[DECODERSAMPLECOUNT];
 uint16_t adcBuffer1[DECODERSAMPLECOUNT];
 
-volatile uint8_t ucInterruptCounter = 0;
 uint8_t ucQueueBytes[MAXRECEIVEDATABYTES + 2] = {};
 
 QueueHandle_t decoderQueue;
@@ -139,71 +137,12 @@ void initDecDMA(void) {
 
 
 
-int sCompare (const void* ValueOne, const void* ValueTwo)
-{
-    return ( *(int*)ValueOne - *(int*)ValueTwo );
-}
-
-uint16_t usMedian(uint16_t usArray[], uint8_t ucElements)
-{
-uint16_t usReturnValue;
-
-    /* First sort the array. */
-    qsort(usArray, ucElements, sizeof(uint16_t), sCompare);
-    
-    
-    /* Check for even case. */
-    if (ucElements % 2 != 0)
-    {
-        usReturnValue = usArray[ucElements / 2];
-    }
-    else
-    {
-        usReturnValue = (usArray[(ucElements - 1) / 2] + usArray[ucElements / 2]) / 2;
-    }
-    
-    return usReturnValue;
-}
-
-uint8_t ucAllocateValue(uint16_t usMedianValue)
-{
-uint8_t ucQAMLevel = 0;
-uint16_t usMedianDifference;
-uint16_t usCompareValue = 0xFFFF;
-    
-    /* Check for each QAM level, which median level is nearest. */
-    for(uint8_t ucQAMLevelCounter = 0; ucQAMLevelCounter < QAMLEVELS; ++ucQAMLevelCounter)
-    {
-        /* Calculate difference of median value and reference value of actual iteration. */
-        usMedianDifference = abs(usMedianValue - usQAMHalfMedianLevels[ucQAMLevelCounter]);
-        
-        /* If newly calculated difference is smaller than previous difference. */
-        if (usMedianDifference < usCompareValue)
-        {
-            usCompareValue = usMedianDifference;
-            ucQAMLevel = ucQAMLevelCounter;
-        }
-    }
-    return ucQAMLevel;
-}
-
-void vOffsetLevelAdjust(uint16_t usReceivedValueArray[], uint16_t* usSignalOffsetLevel)
-{
-uint16_t usTempValueArray[DECODERSAMPLECOUNT] = {};  // Array to copy received data
-uint16_t usTempSignalOffset;
-
-    for (uint8_t ucArrayCopyCounter = 0; ucArrayCopyCounter < DECODERSAMPLECOUNT; ++ucArrayCopyCounter)
-    {
-        usTempValueArray[ucArrayCopyCounter] = usReceivedValueArray[ucArrayCopyCounter];
-    }
-    usTempSignalOffset = usMedian(usTempValueArray, DECODERSAMPLECOUNT);
-    *usSignalOffsetLevel = ((*usSignalOffsetLevel * 5) + usTempSignalOffset) / 6;
-}
-
 uint8_t bGetReceivedData(uint16_t usReceiveArray[], uint8_t* ucActualArrayPos, uint8_t* ucLastTransEnd, uint16_t* usSignalOffsetLevel, uint8_t* ucQAMValue)
 {
 uint8_t ucDataCounter = 0;
 uint8_t ucTransitionFound = TRANSITIONNOTFOUND;
+uint16_t usLowerHalfSignalOffset = 0;
+uint16_t usUpperHalfSignalOffset = 0;
 uint8_t ucMaxValuePos;
 uint8_t ucMinValuePos;
 uint8_t ucMinMaxPosDifference;
@@ -213,10 +152,6 @@ uint16_t ucMinMaxDifference;
 volatile int16_t sSignalDifference[4];
 float fScaleFactor;
 
-
-    /* Find new reference value and copy new array */
-    //vOffsetLevelAdjust(&usReceiveArray[*ucActualArrayPos], usSignalOffsetLevel);
-    *usSignalOffsetLevel = 2575;
     
     ucDataCounter = (*ucLastTransEnd > 5) ? *ucLastTransEnd - 5 : 0;
     
@@ -231,6 +166,17 @@ float fScaleFactor;
                 ucMinValue = 0;
                 for (uint8_t ucPosCounter = 0; ucPosCounter < DECODERSAMPLECOUNT; ++ucPosCounter)
                 {
+                    /* Add all values in two variables to prevent overflow. Needed for mean value calculation. */
+                    if (ucPosCounter < (DECODERSAMPLECOUNT / 2))
+                    {
+                        usLowerHalfSignalOffset += usReceiveArray[ucDataCounter + ucPosCounter];
+                    }
+                    else
+                    {
+                        usUpperHalfSignalOffset += usReceiveArray[ucDataCounter + ucPosCounter];
+                    }
+                    
+                    /* Get the max and the min values and their positions of the sampled data. */
                     if (usReceiveArray[ucDataCounter + ucPosCounter] > usReceiveArray[ucDataCounter + ucMaxValuePos])
                     {
                         ucMaxValuePos = ucPosCounter;
@@ -242,6 +188,12 @@ float fScaleFactor;
                         ucMinValue = usReceiveArray[ucDataCounter + ucPosCounter];
                     }
                 }
+                
+                /* Calculate the new reference offset value. */
+                usLowerHalfSignalOffset /= (DECODERSAMPLECOUNT / 2);
+                usUpperHalfSignalOffset /= (DECODERSAMPLECOUNT / 2);
+                *usSignalOffsetLevel = ((*usSignalOffsetLevel * 5) + ((usLowerHalfSignalOffset + usUpperHalfSignalOffset) / 2)) / 6;
+    
                 if (ucMaxValuePos < ucMinValuePos)
                 {
                     ucMinMaxPosDifference = (ucMinValuePos + ucMaxValuePos) / 2;
@@ -250,7 +202,9 @@ float fScaleFactor;
                         ucMinMaxDifference = (ucMinValue + ucMaxValue) / 2;
                         if ((ucMinMaxDifference >= (*usSignalOffsetLevel - 500)) && (ucMinMaxDifference <= (*usSignalOffsetLevel + 500)))
                         {
+                            /* Calculate scale factor to adjust the initial reference array to the actual waveform scale. */
                             fScaleFactor = (float)ucAbsoulteMaxValue / (float)ucLongTimeMaxValue;
+                            
                             sSignalDifference[0] = 0;
                             sSignalDifference[1] = 0;
                             sSignalDifference[2] = 0;
@@ -258,23 +212,23 @@ float fScaleFactor;
                             int16_t sActualPositionDifference;
                             for (uint8_t ucPosCounter = 0; ucPosCounter < DECODERSAMPLECOUNT; ++ucPosCounter)
                             {
+                                /* Calculate the difference of each waveform over the full sampling period. */
                                 sActualPositionDifference = (int16_t)usReceiveArray[ucDataCounter + ucPosCounter] - *usSignalOffsetLevel;
-                                //sTempValue = (int16_t)((float)(sTempValue) * fScaleFactor) - sDataReference0[ucPosCounter];
                                 sSignalDifference[0] = sSignalDifference[0] + abs((int16_t)((float)(sActualPositionDifference) * fScaleFactor) - sDataReference0[ucPosCounter]);
-                                //sTempValue = (int16_t)((float)((int16_t)usReceiveArray[ucDataCounter + ucPosCounter] - *usSignalOffsetLevel) * fScaleFactor) - sDataReference1[ucPosCounter];
                                 sSignalDifference[1] = sSignalDifference[1] + abs((int16_t)((float)(sActualPositionDifference) * fScaleFactor) - sDataReference1[ucPosCounter]);
-                                //sTempValue = (int16_t)((float)((int16_t)usReceiveArray[ucDataCounter + ucPosCounter] - *usSignalOffsetLevel) * fScaleFactor) - sDataReference2[ucPosCounter];
                                 sSignalDifference[2] = sSignalDifference[2] + abs((int16_t)((float)(sActualPositionDifference) * fScaleFactor) - sDataReference2[ucPosCounter]);
-                                //sTempValue = (int16_t)((float)((int16_t)usReceiveArray[ucDataCounter + ucPosCounter] - *usSignalOffsetLevel) * fScaleFactor) - sDataReference3[ucPosCounter];
                                 sSignalDifference[3] = sSignalDifference[3] + abs((int16_t)((float)(sActualPositionDifference) * fScaleFactor) - sDataReference3[ucPosCounter]);
                             }
-                        
+                            
+                            /* Search the waveform with the smallest difference to the actual signal. */
                             *ucQAMValue = 0;
                             for (uint8_t ucQAMLevelCounter = 0; ucQAMLevelCounter < (QAMLEVELS - 1); ++ucQAMLevelCounter)
                             {
                                 *ucQAMValue = (abs(sSignalDifference[ucQAMLevelCounter + 1]) < abs(sSignalDifference[*ucQAMValue])) ? ucQAMLevelCounter + 1 : *ucQAMValue;
                             }
                             ucTransitionFound = TRANSITIONFOUND;
+                            
+                            /* If it's a QAM level 3, then adjust the absolute maximum signal value. (For scale factor calculation needed) */
                             if (*ucQAMValue == 3)
                             {
                                 ucLongTimeMaxValue = ((ucLongTimeMaxValue * 5) + ((int16_t)ucMaxValue - *usSignalOffsetLevel)) / 6;
@@ -358,7 +312,7 @@ void xProtocolDecoder(void* pvParameters) {
 eProtocolDecoderStates eProtocolDecoder = Idle;
 uint8_t ucReceivedByte;
 volatile uint8_t ucDataBytesReceived;
-uint8_t ucDataBytesCounter = 0;
+volatile uint8_t ucDataBytesCounter = 0;
 uint8_t ucCommandByte;
 uint8_t ucChecksumCalculated;
 //uint8_t ucQueueBytes[MAXRECEIVEDATABYTES + 2] = {};
@@ -420,8 +374,8 @@ uint8_t ucChecksumCalculated;
                     { // If the calculated checksum matches the received checksum.
                         //xQueueSend(receivedProtocolQueue, (void *)ucQueueBytes, pdMS_TO_TICKS(0));
                         xEventGroupSetBits(receivedProtocolEventGroup, 0x01);
-                        ucDataBytesCounter = 0;
                     }
+                    ucDataBytesCounter = 0;
                     eProtocolDecoder = Idle;
                     break;
                 }
@@ -442,27 +396,17 @@ uint8_t ucChecksumCalculated;
 void vQuamDec(void* pvParameters) {
 uint16_t usReceiveArray[8 * DECODERSAMPLECOUNT] = {};
 uint8_t ucArrayReference = 0;           // reference state of array
-uint16_t usReceivedValueArray[DECODERSAMPLECOUNT] = {};  // current received data
 uint8_t ucLastReceiveEnd = 0;
 
-uint16_t usMedianCompareValue;
 uint8_t ucActualQAMValue;
 
-uint8_t ucQAMLevelCalibArrayCounter = 0;
-volatile uint16_t usQAMLevelsForCalibration[16] = {};
-uint8_t ucRefHistory[16];
-uint8_t ucLastReceiveHistory[16];
-uint8_t ucRefHistoryAll[64];
-uint8_t ucRefHistoryAllCounter = 0;
 uint16_t usQAMCalibTriggerValue = 0;
-uint8_t ucByteswoCalibration = 0;
 
-uint8_t queueMessages = 0;
 
 uint8_t ucDataByte = 0;                     // received data byte
 uint8_t ucReceivedBitPackageCounter = 0;    // Counts amount of bit packages.
 
-uint16_t usSignalOffsetLevel = 2500;       // Offset Voltage
+uint16_t usSignalOffsetLevel = 2000;       // Offset Voltage (Must be in a guilty range for beginning)
     
 	decoderQueue = xQueueCreate(1, DECODERSAMPLECOUNT*sizeof(int16_t));
     receivedByteQueue = xQueueCreate(DATABYTEQUEUELENGTH, sizeof(uint8_t));
@@ -474,26 +418,17 @@ uint16_t usSignalOffsetLevel = 2500;       // Offset Voltage
     //xTaskCreate(xProtocolDecoder, NULL, configMINIMAL_STACK_SIZE+400, NULL, 2, NULL);
     
 	for(;;) {
-        queueMessages = uxQueueMessagesWaiting(decoderQueue);
-		if (queueMessages)
+        
+		if (uxQueueMessagesWaiting(decoderQueue))
 		{
     		xQueueReceive(decoderQueue, &usReceiveArray[ucArrayReference], pdMS_TO_TICKS(0));
             if(bGetReceivedData(&usReceiveArray[0], &ucArrayReference, &ucLastReceiveEnd, &usSignalOffsetLevel, &ucActualQAMValue) == TRANSITIONFOUND)
             { /* If data signal was received. */
                 
-                //usMedianCompareValue = usMedian(usReceivedValueArray, MEDIANSAMPLECOMPARECOUNT);
-                //ucActualQAMValue = ucAllocateValue(usMedianCompareValue);
                 
                 ucDataByte = (ucDataByte >> 2) | (ucActualQAMValue << 6);      // fill data byte by left shift (LSB protocol)
                 usQAMCalibTriggerValue = (usQAMCalibTriggerValue >> 2) | (ucActualQAMValue << 14);
-                usQAMLevelsForCalibration[ucByteswoCalibration] = ucActualQAMValue;
-                ucQAMLevelCalibArrayCounter = (ucQAMLevelCalibArrayCounter < 15) ? ucQAMLevelCalibArrayCounter + 1 : 0; 
                 
-                // TODO: remove only for debug
-                ucRefHistory[ucByteswoCalibration] = ucArrayReference;
-                ucLastReceiveHistory[ucByteswoCalibration] = ucLastReceiveEnd;
-                ucRefHistoryAll[ucRefHistoryAllCounter++] = ucArrayReference;
-                ucRefHistoryAll[ucRefHistoryAllCounter++] = 255;
                 
                 if (++ucReceivedBitPackageCounter >= QAMPACKAGESPERBYTE)
                 {
@@ -504,51 +439,16 @@ uint16_t usSignalOffsetLevel = 2500;       // Offset Voltage
                 
                 if (usQAMCalibTriggerValue == CALIBRATIONSIGNAL)
                 {
+                    /* Calibration signal received. Define this to the start of a byte. */
                     usQAMCalibTriggerValue = 0;
                     ucReceivedBitPackageCounter = 0;
-                    /* Set new reference values for all QAM levels. */
-                    /*uint8_t ucQAMLevelArrayPos = 1;
-                    for (int8_t ucSetMedianRefCounter = 0; ucSetMedianRefCounter < 8; ucSetMedianRefCounter+=2)
-                    {
-                        if (ucSetMedianRefCounter + ucQAMLevelCalibArrayCounter < 8)
-                        {
-                            usQAMHalfMedianLevels[ucQAMLevelArrayPos] = (usQAMLevelsForCalibration[ucSetMedianRefCounter + ucQAMLevelCalibArrayCounter] + usQAMLevelsForCalibration[ucSetMedianRefCounter + 1 + ucQAMLevelCalibArrayCounter]) / 2;
-                        }
-                        else
-                        {
-                            usQAMHalfMedianLevels[ucQAMLevelArrayPos] = (usQAMLevelsForCalibration[ucSetMedianRefCounter + ucQAMLevelCalibArrayCounter - 8] + usQAMLevelsForCalibration[ucSetMedianRefCounter + 1 + ucQAMLevelCalibArrayCounter - 8]) / 2;
-                        }
-                        switch (ucQAMLevelArrayPos)
-                        {
-                            case 0: ucQAMLevelArrayPos=3; break;
-                            case 1: ucQAMLevelArrayPos=0; break;
-                            case 2: ucQAMLevelArrayPos=1; break;
-                            case 3: ucQAMLevelArrayPos=2; break;
-                            default: break;
-                        }
-                    }*/
                 }
-                else
-                {
-                    if (++ucByteswoCalibration >= (16))
-                    {
-                        ucByteswoCalibration = 0;
-                        ucRefHistoryAllCounter = 0;
-                    }
-                }
-                /* Find new reference value and copy new array */
-                //vOffsetLevelAdjust(usReceivedValueArray, &usSignalOffsetLevel);
                 
-            }
-            else
-            {
-                ucRefHistoryAll[ucRefHistoryAllCounter++] = ucArrayReference;
-            }            
+            }         
 		}
         else
         {
             vTaskDelay(pdMS_TO_TICKS(1));
-            ucRefHistoryAll[ucRefHistoryAllCounter++] = ucArrayReference;
         }
 	}
 }
@@ -557,7 +457,6 @@ uint16_t usSignalOffsetLevel = 2500;       // Offset Voltage
 void fillDecoderQueue(uint16_t buffer[DECODERSAMPLECOUNT]) {
 	BaseType_t xTaskWokenByReceive = pdFALSE;
 	xQueueSendFromISR(decoderQueue, &buffer[0], &xTaskWokenByReceive);
-    ++ucInterruptCounter;
 }
 
 ISR(DMA_CH2_vect)
