@@ -10,7 +10,7 @@
 #define QAMGEN_H_
 
 void vQuamGen(void *pvParameters);
-
+void vsendCommand(uint8_t Data[]);
 
 
 #endif /* QAMGEN_H_ */
