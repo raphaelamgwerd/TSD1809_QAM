@@ -26,6 +26,11 @@
 
 #include "qamdec.h"
 
+
+#ifndef __OPTIMIZE__
+# warning "Compiler optimizations disabled; functions from qamdec.c won't work as designed"
+#endif
+
 #define COMPLETESAMPLECOUNT             4
 #define DECODERSAMPLECOUNT              32UL
 #define MEDIANSAMPLECOMPARECOUNT        10 //DECODERSAMPLECOUNT / 4
@@ -73,7 +78,7 @@ int16_t sDataReference3[DECODERSAMPLECOUNT] = {   0,  473,  892, 1212, 1398, 143
 uint16_t adcBuffer0[DECODERSAMPLECOUNT];
 uint16_t adcBuffer1[DECODERSAMPLECOUNT];
 
-uint8_t ucQueueBytes[MAXRECEIVEDATABYTES + 2] = {};
+uint8_t ucQAMDataBytes[MAXRECEIVEDATABYTES + 2] = {};
 
 QueueHandle_t decoderQueue;
 volatile QueueHandle_t receivedByteQueue;
@@ -297,11 +302,11 @@ uint8_t queueByte = 0;
     {
     if (xEventGroupClearBits(receivedProtocolEventGroup, 0x01) & 0x01)
         //xQueueReceive(receivedProtocolQueue, &ucQueueBytes, pdMS_TO_TICKS(1));
-        *ucCommand = ucQueueBytes[COMMANDBYTEPOSITION];
-        *ucDataBytes = ucQueueBytes[DATABYTECOUNTPOSITION];
+        *ucCommand = ucQAMDataBytes[COMMANDBYTEPOSITION];
+        *ucDataBytes = ucQAMDataBytes[DATABYTECOUNTPOSITION];
         for (uint8_t ucDataByteCounter = 0; ucDataByteCounter < *ucDataBytes; ++ucDataByteCounter)
         {
-            ucDataArray[ucDataByteCounter] = ucQueueBytes[DATABYTESTARTPOSITION + ucDataByteCounter];
+            ucDataArray[ucDataByteCounter] = ucQAMDataBytes[DATABYTESTARTPOSITION + ucDataByteCounter];
         }
         ucReturnValue = pdTRUE;
     }
@@ -343,9 +348,9 @@ uint8_t ucChecksumCalculated;
                 case Command:
                 {
                     ucCommandByte = (ucReceivedByte & COMMANDMASK) >> COMMANDBITPOSITION;
-                    ucQueueBytes[COMMANDBYTEPOSITION] = ucCommandByte;
+                    ucQAMDataBytes[COMMANDBYTEPOSITION] = ucCommandByte;
                     ucDataBytesReceived = ucReceivedByte & DATABYTESMASK;
-                    ucQueueBytes[DATABYTECOUNTPOSITION] = ucDataBytesReceived;
+                    ucQAMDataBytes[DATABYTECOUNTPOSITION] = ucDataBytesReceived;
                     
                     ucChecksumCalculated = ucReceivedByte; 
                     if (ucDataBytesReceived > 0)
@@ -360,7 +365,7 @@ uint8_t ucChecksumCalculated;
                 }
                 case Data:
                 {
-                    ucQueueBytes[DATABYTESTARTPOSITION + ucDataBytesCounter] = ucReceivedByte;
+                    ucQAMDataBytes[DATABYTESTARTPOSITION + ucDataBytesCounter] = ucReceivedByte;
                     ucChecksumCalculated ^= ucReceivedByte;
                     if (++ucDataBytesCounter >= ucDataBytesReceived)
                     {
@@ -393,7 +398,7 @@ uint8_t ucChecksumCalculated;
     }
 }
 
-void vQuamDec(void* pvParameters) {
+void vQAMDec(void* pvParameters) {
 uint16_t usReceiveArray[8 * DECODERSAMPLECOUNT] = {};
 uint8_t ucArrayReference = 0;           // reference state of array
 uint8_t ucLastReceiveEnd = 0;

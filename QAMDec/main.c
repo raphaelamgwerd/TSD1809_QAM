@@ -47,15 +47,12 @@ int main(void)
 	vInitClock();
 	vInitDisplay();
 	
-	xTaskCreate(vQuamDec, (const char *) "QAMDecoder", configMINIMAL_STACK_SIZE+900, NULL, 2, NULL/*&xQAMdecHandle*/);
+	xTaskCreate(vQAMDec, (const char *) "QAMDecoder", configMINIMAL_STACK_SIZE+900, NULL, 3, NULL/*&xQAMdecHandle*/);
     xTaskCreate(vControl, NULL, configMINIMAL_STACK_SIZE+000, NULL, 2, NULL);
     xTaskCreate(xProtocolDecoder, (const char *) "ProtocolDecoder", configMINIMAL_STACK_SIZE+00, NULL, 2, NULL/*&xProtocolTaskHandle*/);
 	
 	vDisplayClear();
 	vDisplayWriteStringAtPos(0,0,"QAM 4 Decoder  R: %d", reason);
-	//vDisplayWriteStringAtPos(1,0,"EDUBoard 1.0");
-	//vDisplayWriteStringAtPos(2,0,"QAMDEC-Base");
-	//vDisplayWriteStringAtPos(3,0,"ResetReason: %d", reason);
 	vTaskStartScheduler();
 	return 0;
 }

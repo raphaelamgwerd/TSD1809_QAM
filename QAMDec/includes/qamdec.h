@@ -10,7 +10,7 @@
 #define QAMDEC_H_
 
 void xProtocolDecoder(void* pvParameters);
-void vQuamDec(void* pvParameters);
+void vQAMDec(void* pvParameters);
 
 uint8_t ucQAMGetData(uint8_t* ucCommand, uint8_t* ucDataBytes, uint8_t ucDataArray[]);
 
