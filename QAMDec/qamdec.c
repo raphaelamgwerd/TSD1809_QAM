@@ -2,7 +2,8 @@
 * qamdec.c
 *
 * Created: 05.05.2020 16:38:25
-*  Author: Chaos
+*  Author: Martin Burger (base version, ADC, DMA and timer handling)
+*          Raphael Amgwerd (data decoding and protocol implementation)
 */ 
 
 #include <stdlib.h>
@@ -28,37 +29,44 @@
 
 
 #ifndef __OPTIMIZE__
+/* The use of this library only works with code optimisation enabled.
+   Otherwise the data decoding will be too slow. */
 # warning "Compiler optimizations disabled; functions from qamdec.c won't work as designed"
 #endif
 
-#define COMPLETESAMPLECOUNT             4
+/* Defines how many data is sampled within one DMA cycle. */
 #define DECODERSAMPLECOUNT              32UL
-#define MEDIANSAMPLECOMPARECOUNT        10 //DECODERSAMPLECOUNT / 4
+/* Defines the frequency of the ADC. DMA frequency depends on decoder sample count. */
+#define ADCFREQUENCY	                1000UL * DECODERSAMPLECOUNT
 
-#define DATABYTEQUEUELENGTH             1  // Bytes which can be stored in received data bytes queue.
+/* Bytes which can be stored in received data bytes queue. */
+#define DATABYTEQUEUELENGTH             8
 
-#define TRANSITIONNOTFOUND              0 // indicates that no new complete signal was found
-#define TRANSITIONFOUND                 1 // indicates that a new complete signal was found
+/* Amount of DMA transitions which can be stored temporarily. (Must be greater than 3) */
+#define RECEIVEARRAYSIZE                4
 
-#define QAMLEVELS                       4       // QAM4 is implemented.
+/* Indicates if a new complete signal was found. */
+#define SIGNALNOTFOUND                  0
+#define COMPLETESIGNALFOUND             1
+
+/* QAM level definitions. */
+#define QAMLEVELS                       4       // QAM 4 is implemented.
 #define QAMPACKAGESPERBYTE              4       // 4 bit packages of 2 bits for one byte.
 
 /* Protocol defines */
 #define SYNCHRONISATIONBYTE             0xFF
 #define CALIBRATIONSIGNAL               0xAF05
-#define COMMANDMASK                     0xE0
+#define COMMANDMASK                     0xE0    // Command + Amount of Data 0bXXXy'yyyy.
 #define COMMANDBITPOSITION              5
 #define DATABYTESMASK                   0x1F
-#define MAXRECEIVEDATABYTES             32
-#define PROTOCOLSTOSTORE                1   /* can store 16 received messages without getting them */
-#define COMMANDBYTEPOSITION             0   /* position in protocol queue */
-#define DATABYTECOUNTPOSITION           1
-#define DATABYTESTARTPOSITION           2
+#define MAXRECEIVEDATABYTES             32      // Maximum amount of data bytes received.
+#define COMMANDBYTEPOSITION             0       // Position of command byte in data byte array.
+#define DATABYTECOUNTPOSITION           1       // Position of data byte count byte in data byte array.
+#define DATABYTESTARTPOSITION           2       // Start position of data bytes in data byte array.
+#define PROTOCOLCOMPLETEFLAG            0x01    // Flag that indicates a protocol was completely received.
 
 
-#define DECODER_FREQUENCY_INITIAL_VALUE		1000UL * DECODERSAMPLECOUNT
-
-/* Declaration of state machine */
+/* Declaration of protocol decoder state machine */
 typedef enum
 {
     Idle,
@@ -67,39 +75,43 @@ typedef enum
     Checksum
 } eProtocolDecoderStates;
 
-
-uint16_t ucLongTimeMaxValue = 750;  // This value will be adjusted to the absolute maximum value of QAM Level 3.
-uint16_t ucAbsoulteMaxValue = 1438; // This value is the maximum value of compare array of QAM Level 3. (see below)
+/* Reference values for decoding. */
+uint16_t usLongTimeMaxValue = 750;  // This value will be adjusted to the absolute maximum value of QAM Level 3 (dynamically during runtime).
+uint16_t usAbsoulteMaxValue = 1438; // This value is the maximum value of compare array of QAM Level 3. (see below)
 int16_t sDataReference0[DECODERSAMPLECOUNT] = {   0,  237,  447,  606,  700,  719,  668,  559,  410,  245,   88,  -37, -120, -150, -133,  -77,    0,   77,  133,  150,  120,   37,  -88, -245, -410, -559, -668, -719, -700, -606, -447, -237};
 int16_t sDataReference1[DECODERSAMPLECOUNT] = {   0,  317,  603,  833,  989, 1059, 1047,  960,  819,  646,  467,  303,  169,   77,   23,    3,    0,   -3,  -23,  -77, -169, -303, -467, -646, -819, -960, -1047, -1059, -989, -833, -603, -317};
 int16_t sDataReference2[DECODERSAMPLECOUNT] = {   0,  393,  736,  985, 1109, 1098,  957,  715,  410,   89, -201, -416, -529, -529, -422, -233,    0,  233,  422,  529,  529,  416,  201,  -89, -410, -715, -957, -1098, -1109, -985, -736, -393};
 int16_t sDataReference3[DECODERSAMPLECOUNT] = {   0,  473,  892, 1212, 1398, 1438, 1336, 1116,  819,  490,  178,  -76, -240, -302, -266, -153,    0,  153,  266,  302,  240,   76, -178, -490, -819, -1116, -1336, -1438, -1398, -1212, -892, -473};
 
-uint16_t adcBuffer0[DECODERSAMPLECOUNT];
-uint16_t adcBuffer1[DECODERSAMPLECOUNT];
+/* Data buffers for ADC values. */
+uint16_t usADCBuffer0[DECODERSAMPLECOUNT];
+uint16_t usADCBuffer1[DECODERSAMPLECOUNT];
 
+/* Data array for received data bytes. */
 uint8_t ucQAMDataBytes[MAXRECEIVEDATABYTES + 2] = {};
 
+/* Decoder queue for sampled ADC data. */
 QueueHandle_t decoderQueue;
+/* Received bytes to send to protocol decoder. */
 volatile QueueHandle_t receivedByteQueue;
-volatile QueueHandle_t receivedProtocolQueue;
+/* Event group to indicate if protocol was completely received. */
 EventGroupHandle_t receivedProtocolEventGroup;
 
 void initADC(void) {
 	ADCA.CTRLA = 0x01;
 	ADCA.CTRLB = 0x00;
-	ADCA.REFCTRL = 0x20;  //INTVCC = External reference from AREF pin on PORT A (Vcc)
+	ADCA.REFCTRL = 0x20;        // INTVCC = External reference from AREF pin (PA0) on PORT A (must be connected to Vcc)
 	ADCA.PRESCALER = 0x03;
-	ADCA.EVCTRL = 0x39; //Event Channel 7 triggers Channel 0 Conversion
-	ADCA.CH0.CTRL = 0x01; //Singleended positive input without gain
-	ADCA.CH0.MUXCTRL = 0x55; //Input = ADC10 on ADCA = Pin PB2 = DAC-Output
+	ADCA.EVCTRL = 0x39;         // Event Channel 7 triggers Channel 0 Conversion
+	ADCA.CH0.CTRL = 0x01;       // Single ended positive input without gain
+	ADCA.CH0.MUXCTRL = 0x55;    // Input = ADC10 on ADCA = Pin PB2 = DAC-Output
 	ADCA.CH0.INTCTRL = 0x00;
 }
 
 void initADCTimer(void) {
 	TC1_ConfigClockSource(&TCD1, TC_CLKSEL_DIV1_gc);
 	TC1_ConfigWGM(&TCD1, TC_WGMODE_SINGLESLOPE_gc);
-	TC_SetPeriod(&TCD1, 32000000/(DECODER_FREQUENCY_INITIAL_VALUE));
+	TC_SetPeriod(&TCD1, 32000000/(ADCFREQUENCY));
 	EVSYS.CH7MUX = EVSYS_CHMUX_TCD1_OVF_gc;
 }
 
@@ -119,8 +131,8 @@ void initDecDMA(void) {
 	DMA.CH2.SRCADDR0 = ((uint16_t)(&ADCA.CH0.RES) >> 0) & 0xFF;
 	DMA.CH2.SRCADDR1 = ((uint16_t)(&ADCA.CH0.RES) >> 8) & 0xFF;
 	DMA.CH2.SRCADDR2 = 0x00;
-	DMA.CH2.DESTADDR0 = ((uint16_t)(&adcBuffer0[0]) >> 0) & 0xFF;
-	DMA.CH2.DESTADDR1 = ((uint16_t)(&adcBuffer0[0]) >> 8) & 0xFF;
+	DMA.CH2.DESTADDR0 = ((uint16_t)(&usADCBuffer0[0]) >> 0) & 0xFF;
+	DMA.CH2.DESTADDR1 = ((uint16_t)(&usADCBuffer0[0]) >> 8) & 0xFF;
 	DMA.CH2.DESTADDR2 = 0x00;
 
 	DMA.CH3.REPCNT = 0;
@@ -132,8 +144,8 @@ void initDecDMA(void) {
 	DMA.CH3.SRCADDR0 = ((uint16_t)(&ADCA.CH0.RES) >> 0) & 0xFF;
 	DMA.CH3.SRCADDR1 = ((uint16_t)(&ADCA.CH0.RES) >> 8) & 0xFF;
 	DMA.CH3.SRCADDR2 = 0x00;
-	DMA.CH3.DESTADDR0 = ((uint16_t)(&adcBuffer1[0]) >> 0) & 0xFF;
-	DMA.CH3.DESTADDR1 = ((uint16_t)(&adcBuffer1[0]) >> 8) & 0xFF;
+	DMA.CH3.DESTADDR0 = ((uint16_t)(&usADCBuffer1[0]) >> 0) & 0xFF;
+	DMA.CH3.DESTADDR1 = ((uint16_t)(&usADCBuffer1[0]) >> 8) & 0xFF;
 	DMA.CH3.DESTADDR2 = 0x00;
 
 	DMA.CH2.CTRLA |= DMA_CH_ENABLE_bm;
@@ -144,10 +156,17 @@ void initDecDMA(void) {
 
 uint8_t bGetReceivedData(uint16_t usReceiveArray[], uint8_t* ucActualArrayPos, uint8_t* ucLastTransEnd, uint16_t* usSignalOffsetLevel, uint8_t* ucQAMValue)
 {
+/* Counter for current data byte position. */
 uint8_t ucDataCounter = 0;
-uint8_t ucTransitionFound = TRANSITIONNOTFOUND;
+
+/* Flag to indicate if new signal was found. */
+uint8_t ucTransitionFound = SIGNALNOTFOUND;
+
+/* Variables for mean value calculation. */
 uint16_t usLowerHalfSignalOffset = 0;
 uint16_t usUpperHalfSignalOffset = 0;
+
+/* Variables for signal shape detection. */
 uint8_t ucMaxValuePos;
 uint8_t ucMinValuePos;
 uint8_t ucMinMaxPosDifference;
@@ -157,10 +176,13 @@ uint16_t ucMinMaxDifference;
 volatile int16_t sSignalDifference[4];
 float fScaleFactor;
 
-    
+    /* Set data counter to last end position of buffer. */
     ucDataCounter = (*ucLastTransEnd > 5) ? *ucLastTransEnd - 5 : 0;
     
     do {
+        /* The following checks are needed to detect one complete signal. */
+        
+        /* Check for offset level transition. */
         if (usReceiveArray[ucDataCounter + 1] > *usSignalOffsetLevel)
         {
             if (usReceiveArray[ucDataCounter] <= *usSignalOffsetLevel)
@@ -208,7 +230,7 @@ float fScaleFactor;
                         if ((ucMinMaxDifference >= (*usSignalOffsetLevel - 500)) && (ucMinMaxDifference <= (*usSignalOffsetLevel + 500)))
                         {
                             /* Calculate scale factor to adjust the initial reference array to the actual waveform scale. */
-                            fScaleFactor = (float)ucAbsoulteMaxValue / (float)ucLongTimeMaxValue;
+                            fScaleFactor = (float)usAbsoulteMaxValue / (float)usLongTimeMaxValue;
                             
                             sSignalDifference[0] = 0;
                             sSignalDifference[1] = 0;
@@ -231,12 +253,12 @@ float fScaleFactor;
                             {
                                 *ucQAMValue = (abs(sSignalDifference[ucQAMLevelCounter + 1]) < abs(sSignalDifference[*ucQAMValue])) ? ucQAMLevelCounter + 1 : *ucQAMValue;
                             }
-                            ucTransitionFound = TRANSITIONFOUND;
+                            ucTransitionFound = COMPLETESIGNALFOUND;
                             
-                            /* If it's a QAM level 3, then adjust the absolute maximum signal value. (For scale factor calculation needed) */
+                            /* If it's a QAM level 3, then adjust the absolute maximum signal value. (Needed for scale factor calculation) */
                             if (*ucQAMValue == 3)
                             {
-                                ucLongTimeMaxValue = ((ucLongTimeMaxValue * 5) + ((int16_t)ucMaxValue - *usSignalOffsetLevel)) / 6;
+                                usLongTimeMaxValue = ((usLongTimeMaxValue * 5) + ((int16_t)ucMaxValue - *usSignalOffsetLevel)) / 6;
                             }
                         }                        
                     }
@@ -248,17 +270,17 @@ float fScaleFactor;
         ++ucDataCounter;
         /* Repeat as long as no transition (start of signal = sine-transition) was found
            or no complete signal could be found. */
-    } while ((ucTransitionFound == TRANSITIONNOTFOUND) && ((ucDataCounter - 1) < (*ucActualArrayPos)));
+    } while ((ucTransitionFound == SIGNALNOTFOUND) && ((ucDataCounter - 1) < (*ucActualArrayPos)));
     
     --ucDataCounter; // correct position of found transition
     
     
-    if (ucTransitionFound == TRANSITIONFOUND)
+    if (ucTransitionFound == COMPLETESIGNALFOUND)
     {
         /* Copy array values. Extract received data and modify receive data buffer. */
         
         /* Set new reference position in receive array. */
-        if (*ucActualArrayPos <= (6 * DECODERSAMPLECOUNT))
+        if (*ucActualArrayPos <= ((RECEIVEARRAYSIZE - 2) * DECODERSAMPLECOUNT))
         {
             *ucActualArrayPos += DECODERSAMPLECOUNT;
             *ucLastTransEnd = ucDataCounter + DECODERSAMPLECOUNT;
@@ -275,8 +297,9 @@ float fScaleFactor;
         }
     }
     else
-    { // If no complete signal was detected, increase new reference position in array. */
-        if (*ucActualArrayPos <= (6 * DECODERSAMPLECOUNT))
+    {
+        /* If no complete signal was detected, increase new reference position in array. */
+        if (*ucActualArrayPos <= ((RECEIVEARRAYSIZE - 2) * DECODERSAMPLECOUNT))
         {
             *ucActualArrayPos += DECODERSAMPLECOUNT;
         }
@@ -286,22 +309,20 @@ float fScaleFactor;
             *ucLastTransEnd = 0;
         }
     }
+    
     return ucTransitionFound;
 }
 
+/* With this function the last received protocol can be retrieved.
+   Returns pdTRUE in case a message was received, otherwise pdFALSE. */
 uint8_t ucQAMGetData(uint8_t* ucCommand, uint8_t* ucDataBytes, uint8_t ucDataArray[])
 {
-//uint8_t ucQueueBytes[MAXRECEIVEDATABYTES + 2] = {};
 uint8_t ucReturnValue = pdFALSE;
-uint8_t queueByte = 0;
 
-
-    //receivedProtocolQueue = xQueueCreate(PROTOCOLSTOSTORE, sizeof(uint8_t) * 3);//(MAXRECEIVEDATABYTES + 2));
-    queueByte = uxQueueMessagesWaiting(receivedProtocolQueue);
-    if(queueByte)
+    /* Check if protocol is complete and message was received. */
+    if (xEventGroupClearBits(receivedProtocolEventGroup, PROTOCOLCOMPLETEFLAG) & PROTOCOLCOMPLETEFLAG)
     {
-    if (xEventGroupClearBits(receivedProtocolEventGroup, 0x01) & 0x01)
-        //xQueueReceive(receivedProtocolQueue, &ucQueueBytes, pdMS_TO_TICKS(1));
+        /* Copy data values to variables. */
         *ucCommand = ucQAMDataBytes[COMMANDBYTEPOSITION];
         *ucDataBytes = ucQAMDataBytes[DATABYTECOUNTPOSITION];
         for (uint8_t ucDataByteCounter = 0; ucDataByteCounter < *ucDataBytes; ++ucDataByteCounter)
@@ -313,20 +334,25 @@ uint8_t queueByte = 0;
     return ucReturnValue;
 }
 
+/* This function must be executed as a task.
+   The tasks decodes the received bytes
+   checks if a complete message within a protocol was received. */
 void xProtocolDecoder(void* pvParameters) {
+/* Protocol state machine initialization. */
 eProtocolDecoderStates eProtocolDecoder = Idle;
+
+/* Variable to store data bytes received from vQAMdec task. */
 uint8_t ucReceivedByte;
+
+/* Variables to check amount of data bytes which should be received
+   and counter of data bytes received. */
 volatile uint8_t ucDataBytesReceived;
 volatile uint8_t ucDataBytesCounter = 0;
-uint8_t ucCommandByte;
+
+/* Variable to calculate checksum. */
 uint8_t ucChecksumCalculated;
-//uint8_t ucQueueBytes[MAXRECEIVEDATABYTES + 2] = {};
 
-
-    /*if (receivedProtocolQueue == NULL)
-    {
-        receivedProtocolQueue = xQueueCreate(PROTOCOLSTOSTORE, sizeof(uint8_t) * 4);//(MAXRECEIVEDATABYTES + 2));
-    }*/
+    /* Event group creation to indicate if complete message was received. */
     receivedProtocolEventGroup = xEventGroupCreate();
     
     while(1)
@@ -339,16 +365,20 @@ uint8_t ucChecksumCalculated;
             {
                 case Idle:
                 {
+                    /* In idle state, wait for synchronisation byte, which indicates the start of a message transmission. */
                     if (ucReceivedByte == SYNCHRONISATIONBYTE)
                     {
                         eProtocolDecoder = Command;
+                        xEventGroupClearBits(receivedProtocolEventGroup, PROTOCOLCOMPLETEFLAG);
                     }
                     break;
                 }
                 case Command:
                 {
-                    ucCommandByte = (ucReceivedByte & COMMANDMASK) >> COMMANDBITPOSITION;
-                    ucQAMDataBytes[COMMANDBYTEPOSITION] = ucCommandByte;
+                    /* Command byte extraction. */
+                    ucQAMDataBytes[COMMANDBYTEPOSITION] = (ucReceivedByte & COMMANDMASK) >> COMMANDBITPOSITION;
+                    
+                    /* Amount of data bytes extraction. */
                     ucDataBytesReceived = ucReceivedByte & DATABYTESMASK;
                     ucQAMDataBytes[DATABYTECOUNTPOSITION] = ucDataBytesReceived;
                     
@@ -359,26 +389,33 @@ uint8_t ucChecksumCalculated;
                     }
                     else
                     {
+                        /* If no data bytes should be received, go to checksum check. */
                         eProtocolDecoder = Checksum;
                     }
                     break;
                 }
                 case Data:
                 {
+                    /* Get data byte and store to data byte array. */
                     ucQAMDataBytes[DATABYTESTARTPOSITION + ucDataBytesCounter] = ucReceivedByte;
+                    
+                    /* Calculate checksum. */
                     ucChecksumCalculated ^= ucReceivedByte;
                     if (++ucDataBytesCounter >= ucDataBytesReceived)
                     {
+                        /* If all data bytes are received, go to checksum check. */
                         eProtocolDecoder = Checksum;
                     }
                     break;
                 }
                 case Checksum:
                 {
+                    /* Compare calculated checksum with received checksum. */
                     if (ucReceivedByte == ucChecksumCalculated)
-                    { // If the calculated checksum matches the received checksum.
-                        //xQueueSend(receivedProtocolQueue, (void *)ucQueueBytes, pdMS_TO_TICKS(0));
-                        xEventGroupSetBits(receivedProtocolEventGroup, 0x01);
+                    {
+                        /* If the calculated checksum matches the received checksum,
+                           set the flag, to indicate complete message was received. */
+                        xEventGroupSetBits(receivedProtocolEventGroup, PROTOCOLCOMPLETEFLAG);
                     }
                     ucDataBytesCounter = 0;
                     eProtocolDecoder = Idle;
@@ -398,45 +435,65 @@ uint8_t ucChecksumCalculated;
     }
 }
 
+/* This function must be executed as a task.
+   The task handles the QAM decoding functions
+   and sends the decoded bytes to the protocol decoder task
+   via a queue.
+   This task must be executed with one of the highest priorities,
+   otherwise loss of data is expected. */
 void vQAMDec(void* pvParameters) {
-uint16_t usReceiveArray[8 * DECODERSAMPLECOUNT] = {};
-uint8_t ucArrayReference = 0;           // reference state of array
+
+/* Receive buffer for received ADC values. */
+uint16_t usReceiveArray[RECEIVEARRAYSIZE * DECODERSAMPLECOUNT] = {};
+
+/* Current position of received buffer. */
+uint8_t ucArrayReference = 0;
+/* Position of last sine transition of received signal. Saved for next signal recognition. */
 uint8_t ucLastReceiveEnd = 0;
 
+/* Decoded QAM value. */
 uint8_t ucActualQAMValue;
 
+/* Used for idle signal detection, which is used to recognize the beginning of a byte. */
 uint16_t usQAMCalibTriggerValue = 0;
 
+/* Received data byte. */
+uint8_t ucDataByte = 0;
 
-uint8_t ucDataByte = 0;                     // received data byte
-uint8_t ucReceivedBitPackageCounter = 0;    // Counts amount of bit packages.
+/* Counts amount of received bit packages. */
+uint8_t ucReceivedBitPackageCounter = 0;
 
-uint16_t usSignalOffsetLevel = 2000;       // Offset Voltage (Must be in a guilty range for beginning)
+/* Offset voltage (must be in a guilty range at startup). */
+uint16_t usSignalOffsetLevel = 2000;
+
     
 	decoderQueue = xQueueCreate(1, DECODERSAMPLECOUNT*sizeof(int16_t));
     receivedByteQueue = xQueueCreate(DATABYTEQUEUELENGTH, sizeof(uint8_t));
-    receivedProtocolQueue = xQueueCreate(PROTOCOLSTOSTORE, sizeof(uint8_t) * 4);//(MAXRECEIVEDATABYTES + 2));
 	
 	initDecDMA();
 	initADC();
 	initADCTimer();
-    //xTaskCreate(xProtocolDecoder, NULL, configMINIMAL_STACK_SIZE+400, NULL, 2, NULL);
+	xTaskCreate(xProtocolDecoder, (const char *) "ProtocolDecoder", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
     
-	for(;;) {
-        
+	while (1)
+    {
+        /* Check if ADC values received and in queue. */
 		if (uxQueueMessagesWaiting(decoderQueue))
 		{
     		xQueueReceive(decoderQueue, &usReceiveArray[ucArrayReference], pdMS_TO_TICKS(0));
-            if(bGetReceivedData(&usReceiveArray[0], &ucArrayReference, &ucLastReceiveEnd, &usSignalOffsetLevel, &ucActualQAMValue) == TRANSITIONFOUND)
-            { /* If data signal was received. */
+            /* Check if Signal is complete and extrec bit package of the sampled ADC values. */
+            if (bGetReceivedData(&usReceiveArray[0], &ucArrayReference, &ucLastReceiveEnd, &usSignalOffsetLevel, &ucActualQAMValue) == COMPLETESIGNALFOUND)
+            {
+                /* If data signal was received. */
                 
-                
-                ucDataByte = (ucDataByte >> 2) | (ucActualQAMValue << 6);      // fill data byte by left shift (LSB protocol)
+                /* Fill data byte by left shift (LSB protocol). */
+                ucDataByte = (ucDataByte >> 2) | (ucActualQAMValue << 6);
                 usQAMCalibTriggerValue = (usQAMCalibTriggerValue >> 2) | (ucActualQAMValue << 14);
                 
-                
+                /* Check if a full byte was received. */
                 if (++ucReceivedBitPackageCounter >= QAMPACKAGESPERBYTE)
                 {
+                    /* If a complete byte was received, push it into the queue. */
                     ucReceivedBitPackageCounter = 0;
                     xQueueSend(receivedByteQueue, (void*)&ucDataByte, pdMS_TO_TICKS(0));
                     ucDataByte = 0;
@@ -444,7 +501,7 @@ uint16_t usSignalOffsetLevel = 2000;       // Offset Voltage (Must be in a guilt
                 
                 if (usQAMCalibTriggerValue == CALIBRATIONSIGNAL)
                 {
-                    /* Calibration signal received. Define this to the start of a byte. */
+                    /* Calibration signal received. Define this as the start of a byte. */
                     usQAMCalibTriggerValue = 0;
                     ucReceivedBitPackageCounter = 0;
                 }
@@ -459,19 +516,19 @@ uint16_t usSignalOffsetLevel = 2000;       // Offset Voltage (Must be in a guilt
 }
 
 
-void fillDecoderQueue(uint16_t buffer[DECODERSAMPLECOUNT]) {
+void fillDecoderQueue(uint16_t usDataBuffer[DECODERSAMPLECOUNT]) {
 	BaseType_t xTaskWokenByReceive = pdFALSE;
-	xQueueSendFromISR(decoderQueue, &buffer[0], &xTaskWokenByReceive);
+	xQueueSendFromISR(decoderQueue, &usDataBuffer[0], &xTaskWokenByReceive);
 }
 
 ISR(DMA_CH2_vect)
 {
 	DMA.CH2.CTRLB|=0x10;
-	fillDecoderQueue(&adcBuffer0[0]);
+	fillDecoderQueue(&usADCBuffer0[0]);
 }
 
 ISR(DMA_CH3_vect)
 {
 	DMA.CH3.CTRLB|=0x10;
-	fillDecoderQueue(&adcBuffer1[0]);
+	fillDecoderQueue(&usADCBuffer1[0]);
 }
