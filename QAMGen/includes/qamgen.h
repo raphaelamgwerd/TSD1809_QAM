@@ -11,6 +11,7 @@
 
 void vQuamGen(void *pvParameters);
 void vsendCommand(uint8_t Data[]);
+void vsendFrame(void *pvParameters);
 
 
 #endif /* QAMGEN_H_ */

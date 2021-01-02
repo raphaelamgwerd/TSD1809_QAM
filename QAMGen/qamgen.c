@@ -21,11 +21,13 @@
  #include "mem_check.h"
 #include "qamgen.h"
 
+/* QAM settings. */
 #define AMPLITUDE_1 0x01
 #define AMPLITUDE_2 0x02
 #define DATEN_AUFBEREITET 0x04
 #define NR_OF_DATA_SAMPLES 32UL
 
+/* DAC settings. */
 #define NR_OF_GENERATOR_SAMPLES					32UL
 #define GENERATOR_FREQUENCY_INITIAL_VALUE		1000UL
 
@@ -36,8 +38,6 @@
 /* Defines which bits are representing the amount of data bytes to be sent. */
 #define DATABYTETOSENDMASK      0x1F
 
-void vsendCommand(uint8_t Data[]);
-void vsendFrame(void *pvParameters);
 
 typedef enum
 {
