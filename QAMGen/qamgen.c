@@ -54,6 +54,7 @@ EventGroupHandle_t xQAMchannel_2;
 
 QueueHandle_t xQueue_Data;
 
+/* Predefined sine arrays with 32 values. */
 const int16_t sinLookup1000[NR_OF_GENERATOR_SAMPLES] = {   0,   80,  157,  228,  290,  341,  378,  402,
                                                          410,  402,  378,  341,  290,  228,  157,   80,
                                                            0,  -80, -157, -228, -290, -341, -378, -402, 
@@ -66,6 +67,7 @@ const int16_t sinLookup2000[NR_OF_GENERATOR_SAMPLES] = { 0,  157,  290,  378,  4
                                                          0, -157, -290, -378, -410, -378, -290, -157
                                                          };
 
+/* Buffers for DAC with DMA. */
 static uint16_t dacBuffer0[NR_OF_GENERATOR_SAMPLES] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 														0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 														0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -158,13 +160,13 @@ void initGenDMA(void) {
 	DMA.CH0.CTRLA |= DMA_CH_ENABLE_bm;
 	DMA.CH1.CTRLA |= DMA_CH_ENABLE_bm; 
     DMA.CH2.CTRLA |= DMA_CH_ENABLE_bm;
-    DMA.CH3.CTRLA |= DMA_CH_ENABLE_bm;// later, not yet tested!
+    DMA.CH3.CTRLA |= DMA_CH_ENABLE_bm;
 }
 void initDACTimer(void) {
 	TC0_ConfigClockSource(&TCD0, TC_CLKSEL_DIV1_gc);
 	TC0_ConfigWGM(&TCD0, TC_WGMODE_SINGLESLOPE_gc);
 	TC_SetPeriod(&TCD0, 32000000/(GENERATOR_FREQUENCY_INITIAL_VALUE*NR_OF_GENERATOR_SAMPLES));
-	EVSYS.CH0MUX = EVSYS_CHMUX_TCD0_OVF_gc; //Setup Eventsystem when timer TCD0 overflows
+	EVSYS.CH0MUX = EVSYS_CHMUX_TCD0_OVF_gc; //Setup Eventsystem with timer TCD0 overflow
 }
 
 void vQuamGen(void *pvParameters) {
@@ -252,8 +254,9 @@ ISR(DMA_CH3_vect)
 void vsendCommand(uint8_t Data[])
 {
 
-     if( xQueue_Data != 0 )
+    if( xQueue_Data != 0 )
     {
+        /* Put data to send to xQueue_Data. */
         xQueueSend(xQueue_Data,(void *)Data,pdMS_TO_TICKS(10));
     }    
 }

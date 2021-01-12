@@ -2,10 +2,10 @@
  * QAMGen.c
  *
  * Created: 20.03.2018 18:32:07
- * Author : chaos
+ * Author : Sven Hildinger
  */ 
 
-//#include <avr/io.h>
+#include <stdio.h>
 #include "avr_compiler.h"
 #include "pmic_driver.h"
 #include "TC_driver.h"
@@ -52,7 +52,8 @@ typedef enum
 	smalldata,
 	middledata,
 	bigdata,
-	writedata,
+    stringdata,
+	writedata
 } eSteuerungStates;
 
 
@@ -120,6 +121,11 @@ eSteuerungStates Steuerung = smalldata;
                 if (Buttonvalue&BUTTON3SHORTPRESSEDMASK)
                 {
                     Steuerung=bigdata;
+                }
+                
+                if (Buttonvalue&BUTTON4SHORTPRESSEDMASK)
+                {
+                    Steuerung=stringdata;
                 }
                 break;
             }            
@@ -201,6 +207,17 @@ eSteuerungStates Steuerung = smalldata;
 				break;
 			}
 		
+            case stringdata:
+            {
+                /* Command 3 is the command to transmit a string. */
+                DataString[0] = 0x71;   // 0b011 1'0001 -> Command = 3, Databytes = 17
+                sprintf((char*)&DataString[1], "Test erfolgreich!");
+                Steuerung = writedata;
+                vDisplayWriteStringAtPos(1, 0, "Data:      string   ");
+                
+                break;
+            }
+            
 			case writedata:
 			{
     			vDisplayWriteStringAtPos(2, 0, "Command:   %d ", DataString[0] >> 5);

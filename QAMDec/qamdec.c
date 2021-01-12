@@ -84,10 +84,25 @@ typedef enum
 /* Reference values for decoding. */
 uint16_t usLongTimeMaxValue = 750;  // This value will be adjusted to the absolute maximum value of QAM Level 3 (dynamically during runtime).
 uint16_t usAbsoulteMaxValue = 1438; // This value is the maximum value of compare array of QAM Level 3. (see below)
-int16_t sDataReference0[DECODERSAMPLECOUNT] = {    0,   237,   447,   606,   700,   719,   668,   559,   410,   245,    88,   -37,  -120,  -150,  -133,   -77,     0,    77,   133,   150,   120,    37,   -88,  -245,  -410,  -559,  -668,  -719,  -700,  -606,  -447,  -237};
-int16_t sDataReference1[DECODERSAMPLECOUNT] = {    0,   317,   603,   833,   989,  1059,  1047,   960,   819,   646,   467,   303,   169,    77,    23,     3,     0,    -3,   -23,   -77,  -169,  -303,  -467,  -646,  -819,  -960, -1047, -1059,  -989,  -833,  -603,  -317};
-int16_t sDataReference2[DECODERSAMPLECOUNT] = {    0,   393,   736,   985,  1109,  1098,   957,   715,   410,    89,  -201,  -416,  -529,  -529,  -422,  -233,     0,   233,   422,   529,   529,   416,   201,   -89,  -410,  -715,  -957, -1098, -1109,  -985,  -736,  -393};
-int16_t sDataReference3[DECODERSAMPLECOUNT] = {    0,   473,   892,  1212,  1398,  1438,  1336,  1116,   819,   490,   178,   -76,  -240,  -302,  -266,  -153,     0,   153,   266,   302,   240,    76,  -178,  -490,  -819, -1116, -1336, -1438, -1398, -1212,  -892,  -473};
+int16_t sDataReference0[DECODERSAMPLECOUNT] = {    0,   237,   447,   606,   700,   719,   668,   559,
+                                                 410,   245,    88,   -37,  -120,  -150,  -133,   -77,
+                                                   0,    77,   133,   150,   120,    37,   -88,  -245,
+                                                -410,  -559,  -668,  -719,  -700,  -606,  -447,  -237};
+                                                
+int16_t sDataReference1[DECODERSAMPLECOUNT] = {    0,   317,   603,   833,   989,  1059,  1047,   960,
+                                                 819,   646,   467,   303,   169,    77,    23,     3,
+                                                   0,    -3,   -23,   -77,  -169,  -303,  -467,  -646,
+                                                -819,  -960, -1047, -1059,  -989,  -833,  -603,  -317};
+                                                
+int16_t sDataReference2[DECODERSAMPLECOUNT] = {    0,   393,   736,   985,  1109,  1098,   957,   715,
+                                                 410,    89,  -201,  -416,  -529,  -529,  -422,  -233,
+                                                   0,   233,   422,   529,   529,   416,   201,   -89,
+                                                -410,  -715,  -957, -1098, -1109,  -985,  -736,  -393};
+                                                
+int16_t sDataReference3[DECODERSAMPLECOUNT] = {    0,   473,   892,  1212,  1398,  1438,  1336,  1116,
+                                                 819,   490,   178,   -76,  -240,  -302,  -266,  -153,
+                                                   0,   153,   266,   302,   240,    76,  -178,  -490,
+                                                -819, -1116, -1336, -1438, -1398, -1212,  -892,  -473};
 
 /* Data buffers for ADC values. */
 uint16_t usADCBuffer0[DECODERSAMPLECOUNT];
@@ -118,6 +133,8 @@ void initADCTimer(void) {
 	TC1_ConfigClockSource(&TCD1, TC_CLKSEL_DIV1_gc);
 	TC1_ConfigWGM(&TCD1, TC_WGMODE_SINGLESLOPE_gc);
 	TC_SetPeriod(&TCD1, 32000000/(ADCFREQUENCY));
+    
+    /* Setup event system with timer TCD1 overflow. */
 	EVSYS.CH7MUX = EVSYS_CHMUX_TCD1_OVF_gc;
 }
 
@@ -329,6 +346,11 @@ uint8_t ucReturnValue = pdFALSE;
     /* Check if protocol is complete and message was received. */
     if (xEventGroupClearBits(receivedProtocolEventGroup, PROTOCOLCOMPLETEFLAG) & PROTOCOLCOMPLETEFLAG)
     {
+        /* EventGroup is used here, because if turned required optimization on,
+           queue was optimized away. A workaround is as here implemented with an EventGroup.
+           The positive effect is that just one data array must be defined
+           which is shared with the xProtocolDecoder task. */
+        
         /* Copy data values to variables. */
         *ucCommand = ucQAMDataBytes[COMMANDBYTEPOSITION];
         *ucDataBytes = ucQAMDataBytes[DATABYTECOUNTPOSITION];
@@ -529,7 +551,7 @@ uint16_t usSignalOffsetLevel = 2000;
 	}
 }
 
-
+/* This function fills the decoderQueue with the received ADC data. */
 void fillDecoderQueue(uint16_t usDataBuffer[DECODERSAMPLECOUNT]) {
 	BaseType_t xTaskWokenByReceive = pdFALSE;
 	xQueueSendFromISR(decoderQueue, &usDataBuffer[0], &xTaskWokenByReceive);

@@ -2,10 +2,11 @@
  * QAMDec.c
  *
  * Created: 20.03.2018 18:32:07
- * Author : chaos
+ * Author : Raphael Amgwerd
  */ 
 
-//#include <avr/io.h>
+#include <stdio.h>
+#include <string.h>
 #include "avr_compiler.h"
 #include "pmic_driver.h"
 #include "TC_driver.h"
@@ -32,8 +33,6 @@
 extern void vApplicationIdleHook( void );
 void vControl(void* pvParameters);
 
-volatile TaskHandle_t xQAMdecHandle;
-volatile TaskHandle_t xProtocolTaskHandle;
 
 void vApplicationIdleHook( void )
 {	
@@ -47,8 +46,8 @@ int main(void)
 	vInitClock();
 	vInitDisplay();
 	
-	xTaskCreate(vQAMDec, (const char *) "QAMDecoder", configMINIMAL_STACK_SIZE+800, NULL, 3, NULL/*&xQAMdecHandle*/);
-    xTaskCreate(vControl, NULL, configMINIMAL_STACK_SIZE, NULL, 2, NULL);
+	xTaskCreate(vQAMDec, (const char *) "QAMDecoder", configMINIMAL_STACK_SIZE+800, NULL, 3, NULL);
+    xTaskCreate(vControl, NULL, configMINIMAL_STACK_SIZE+100, NULL, 2, NULL);
 	
 	vDisplayClear();
 	vDisplayWriteStringAtPos(0,0,"QAM 4 Decoder  R: %d", reason);
@@ -61,6 +60,7 @@ void vControl(void* pvParameters) {
 uint8_t ucCommand;
 uint8_t ucReceivedDataBytes;
 uint8_t ucDataArray[32] = {};
+uint8_t ucOutputString[32] = {};
 
     while(1)
     {
@@ -71,12 +71,22 @@ uint8_t ucDataArray[32] = {};
                 vDisplayWriteStringAtPos(1, 0, "Command:   %d ", ucCommand);
                 vDisplayWriteStringAtPos(2, 0, "DataBytes: %d ", ucReceivedDataBytes);
                 vDisplayWriteStringAtPos(3, 0, "                    ");
-                for (uint8_t ucDataPrintCounter = 0; ucDataPrintCounter < ucReceivedDataBytes; ++ucDataPrintCounter)
+                if (ucCommand != 3)
                 {
-                    if (ucDataPrintCounter < ucReceivedDataBytes)
+                    /* Print received data bytes. */
+                    for (uint8_t ucDataPrintCounter = 0; ucDataPrintCounter < ucReceivedDataBytes; ++ucDataPrintCounter)
                     {
-                        vDisplayWriteStringAtPos(3, ucDataPrintCounter * 2, "%x", ucDataArray[ucDataPrintCounter]);
+                        if (ucDataPrintCounter < ucReceivedDataBytes)
+                        {
+                            vDisplayWriteStringAtPos(3, ucDataPrintCounter * 2, "%x", ucDataArray[ucDataPrintCounter]);
+                        }
                     }
+                }
+                else
+                {
+                    /* Command 3 indicates a string which can now be printed. */
+                    strncpy((char*)ucOutputString, (char*)ucDataArray, ucReceivedDataBytes);
+                    vDisplayWriteStringAtPos(3, 0, "%s", ucOutputString);
                 }
                 ucCommand = 0;
                 ucReceivedDataBytes = 0;
