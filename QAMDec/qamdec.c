@@ -45,6 +45,12 @@
 /* Amount of DMA transitions which can be stored temporarily. (Must be greater than 3) */
 #define RECEIVEARRAYSIZE                4
 
+/* Margin in which the max. and the min. position can differ from half of the sample amount. */
+#define POSDIFFMARGIN                   3
+
+/* Margin in which difference of max. and min. value from offset level can be. */
+#define OFFSETLEVELMARGIN               800
+
 /* Indicates if a new complete signal was found. */
 #define SIGNALNOTFOUND                  0
 #define COMPLETESIGNALFOUND             1
@@ -78,10 +84,10 @@ typedef enum
 /* Reference values for decoding. */
 uint16_t usLongTimeMaxValue = 750;  // This value will be adjusted to the absolute maximum value of QAM Level 3 (dynamically during runtime).
 uint16_t usAbsoulteMaxValue = 1438; // This value is the maximum value of compare array of QAM Level 3. (see below)
-int16_t sDataReference0[DECODERSAMPLECOUNT] = {   0,  237,  447,  606,  700,  719,  668,  559,  410,  245,   88,  -37, -120, -150, -133,  -77,    0,   77,  133,  150,  120,   37,  -88, -245, -410, -559, -668, -719, -700, -606, -447, -237};
-int16_t sDataReference1[DECODERSAMPLECOUNT] = {   0,  317,  603,  833,  989, 1059, 1047,  960,  819,  646,  467,  303,  169,   77,   23,    3,    0,   -3,  -23,  -77, -169, -303, -467, -646, -819, -960, -1047, -1059, -989, -833, -603, -317};
-int16_t sDataReference2[DECODERSAMPLECOUNT] = {   0,  393,  736,  985, 1109, 1098,  957,  715,  410,   89, -201, -416, -529, -529, -422, -233,    0,  233,  422,  529,  529,  416,  201,  -89, -410, -715, -957, -1098, -1109, -985, -736, -393};
-int16_t sDataReference3[DECODERSAMPLECOUNT] = {   0,  473,  892, 1212, 1398, 1438, 1336, 1116,  819,  490,  178,  -76, -240, -302, -266, -153,    0,  153,  266,  302,  240,   76, -178, -490, -819, -1116, -1336, -1438, -1398, -1212, -892, -473};
+int16_t sDataReference0[DECODERSAMPLECOUNT] = {    0,   237,   447,   606,   700,   719,   668,   559,   410,   245,    88,   -37,  -120,  -150,  -133,   -77,     0,    77,   133,   150,   120,    37,   -88,  -245,  -410,  -559,  -668,  -719,  -700,  -606,  -447,  -237};
+int16_t sDataReference1[DECODERSAMPLECOUNT] = {    0,   317,   603,   833,   989,  1059,  1047,   960,   819,   646,   467,   303,   169,    77,    23,     3,     0,    -3,   -23,   -77,  -169,  -303,  -467,  -646,  -819,  -960, -1047, -1059,  -989,  -833,  -603,  -317};
+int16_t sDataReference2[DECODERSAMPLECOUNT] = {    0,   393,   736,   985,  1109,  1098,   957,   715,   410,    89,  -201,  -416,  -529,  -529,  -422,  -233,     0,   233,   422,   529,   529,   416,   201,   -89,  -410,  -715,  -957, -1098, -1109,  -985,  -736,  -393};
+int16_t sDataReference3[DECODERSAMPLECOUNT] = {    0,   473,   892,  1212,  1398,  1438,  1336,  1116,   819,   490,   178,   -76,  -240,  -302,  -266,  -153,     0,   153,   266,   302,   240,    76,  -178,  -490,  -819, -1116, -1336, -1438, -1398, -1212,  -892,  -473};
 
 /* Data buffers for ADC values. */
 uint16_t usADCBuffer0[DECODERSAMPLECOUNT];
@@ -173,8 +179,10 @@ uint8_t ucMinMaxPosDifference;
 uint16_t ucMaxValue;
 uint16_t ucMinValue;
 uint16_t ucMinMaxDifference;
+int16_t sActualPositionDifference;
 volatile int16_t sSignalDifference[4];
 float fScaleFactor;
+
 
     /* Set data counter to last end position of buffer. */
     ucDataCounter = (*ucLastTransEnd > 5) ? *ucLastTransEnd - 5 : 0;
@@ -224,10 +232,10 @@ float fScaleFactor;
                 if (ucMaxValuePos < ucMinValuePos)
                 {
                     ucMinMaxPosDifference = (ucMinValuePos + ucMaxValuePos) / 2;
-                    if ((ucMinMaxPosDifference >= 12) && (ucMinMaxPosDifference <= 18))
+                    if ((ucMinMaxPosDifference >= ((DECODERSAMPLECOUNT / 2) - 1 - POSDIFFMARGIN)) && (ucMinMaxPosDifference <= ((DECODERSAMPLECOUNT / 2) - 1 + POSDIFFMARGIN)))
                     {
                         ucMinMaxDifference = (ucMinValue + ucMaxValue) / 2;
-                        if ((ucMinMaxDifference >= (*usSignalOffsetLevel - 500)) && (ucMinMaxDifference <= (*usSignalOffsetLevel + 500)))
+                        if ((ucMinMaxDifference >= (*usSignalOffsetLevel - OFFSETLEVELMARGIN)) && (ucMinMaxDifference <= (*usSignalOffsetLevel + OFFSETLEVELMARGIN)))
                         {
                             /* Calculate scale factor to adjust the initial reference array to the actual waveform scale. */
                             fScaleFactor = (float)usAbsoulteMaxValue / (float)usLongTimeMaxValue;
@@ -236,8 +244,7 @@ float fScaleFactor;
                             sSignalDifference[1] = 0;
                             sSignalDifference[2] = 0;
                             sSignalDifference[3] = 0;
-                            int16_t sActualPositionDifference;
-                            for (uint8_t ucPosCounter = 0; ucPosCounter < DECODERSAMPLECOUNT; ++ucPosCounter)
+                            for (uint8_t ucPosCounter = 0; ucPosCounter < 32; ++ucPosCounter)
                             {
                                 /* Calculate the difference of each waveform over the full sampling period. */
                                 sActualPositionDifference = (int16_t)usReceiveArray[ucDataCounter + ucPosCounter] - *usSignalOffsetLevel;
@@ -417,6 +424,13 @@ uint8_t ucChecksumCalculated;
                            set the flag, to indicate complete message was received. */
                         xEventGroupSetBits(receivedProtocolEventGroup, PROTOCOLCOMPLETEFLAG);
                     }
+                    else
+                    {
+                        ucQAMDataBytes[COMMANDBYTEPOSITION] = 0x07;
+                        ucQAMDataBytes[DATABYTECOUNTPOSITION] = 0x00;
+                        xEventGroupSetBits(receivedProtocolEventGroup, PROTOCOLCOMPLETEFLAG);
+                        
+                    }
                     ucDataBytesCounter = 0;
                     eProtocolDecoder = Idle;
                     break;
@@ -430,7 +444,7 @@ uint8_t ucChecksumCalculated;
         }
         else
         {
-            vTaskDelay(pdMS_TO_TICKS(1));
+            vTaskDelay(pdMS_TO_TICKS(4));
         }
     }
 }
@@ -481,7 +495,7 @@ uint16_t usSignalOffsetLevel = 2000;
 		if (uxQueueMessagesWaiting(decoderQueue))
 		{
     		xQueueReceive(decoderQueue, &usReceiveArray[ucArrayReference], pdMS_TO_TICKS(0));
-            /* Check if Signal is complete and extrec bit package of the sampled ADC values. */
+            /* Check if signal is complete and extract bit package of the sampled ADC values. */
             if (bGetReceivedData(&usReceiveArray[0], &ucArrayReference, &ucLastReceiveEnd, &usSignalOffsetLevel, &ucActualQAMValue) == COMPLETESIGNALFOUND)
             {
                 /* If data signal was received. */

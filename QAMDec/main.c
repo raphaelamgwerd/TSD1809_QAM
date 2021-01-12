@@ -48,7 +48,7 @@ int main(void)
 	vInitDisplay();
 	
 	xTaskCreate(vQAMDec, (const char *) "QAMDecoder", configMINIMAL_STACK_SIZE+800, NULL, 3, NULL/*&xQAMdecHandle*/);
-    xTaskCreate(vControl, NULL, configMINIMAL_STACK_SIZE+000, NULL, 2, NULL);
+    xTaskCreate(vControl, NULL, configMINIMAL_STACK_SIZE, NULL, 2, NULL);
 	
 	vDisplayClear();
 	vDisplayWriteStringAtPos(0,0,"QAM 4 Decoder  R: %d", reason);
@@ -70,6 +70,7 @@ uint8_t ucDataArray[32] = {};
             {
                 vDisplayWriteStringAtPos(1, 0, "Command:   %d ", ucCommand);
                 vDisplayWriteStringAtPos(2, 0, "DataBytes: %d ", ucReceivedDataBytes);
+                vDisplayWriteStringAtPos(3, 0, "                    ");
                 for (uint8_t ucDataPrintCounter = 0; ucDataPrintCounter < ucReceivedDataBytes; ++ucDataPrintCounter)
                 {
                     if (ucDataPrintCounter < ucReceivedDataBytes)
